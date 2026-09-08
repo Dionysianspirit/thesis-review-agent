@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from thesis_review.checks.format import check_format
+from thesis_review.checks.language import check_language
+from thesis_review.errors import ReviewError
+from thesis_review.history.ingest import issues_from_comments, issues_from_revisions, persist
+from thesis_review.history.match import match_issue
+from thesis_review.history.store import HistoryStore
+from thesis_review.llm import model_available, suggest_language_findings
+from thesis_review.settings import AppSettings, load_settings
+from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ReviewResult
+from thesis_review.word.adapter import WordAdapter
+
+ASSISTANT_AUTHOR = "审改助手"
+
+
+class ThesisReviewService:
+    def __init__(
+        self,
+        *,
+        store: HistoryStore,
+        adapter: WordAdapter | None = None,
+        home: Path,
+    ) -> None:
+        self.store = store
+        self.adapter = adapter or WordAdapter()
+        self.home = Path(home)
+        self.home.mkdir(parents=True, exist_ok=True)
+
+    def ingest_history(
+        self,
+        *,
+        teacher_id: str,
+        student_id: str,
+        major: str,
+        draft_id: str,
+        data: bytes,
+    ) -> list[IssueRecord]:
+        opened = self.adapter.open_bytes(data)
+        comments = issues_from_comments(
+            teacher_id=teacher_id,
+            student_id=student_id,
+            major=major,
+            draft_id=draft_id,
+            comments=self.adapter.extract_comments(opened),
+        )
+        revisions = issues_from_revisions(
+            teacher_id=teacher_id,
+            student_id=student_id,
+            major=major,
+            draft_id=draft_id,
+            revisions=self.adapter.extract_revisions(opened),
+            assistant_author=ASSISTANT_AUTHOR,
+        )
+        return persist(self.store, comments + revisions)
+
+    def confirm_issue(self, *, teacher_id: str, student_id: str, issue_id: str) -> IssueRecord:
+        return self.store.set_status(
+            teacher_id=teacher_id,
+            student_id=student_id,
+            issue_id=issue_id,
+            status="confirmed",
+        )
+
+    def disable_issue(self, *, teacher_id: str, student_id: str, issue_id: str) -> IssueRecord:
+        return self.store.set_status(
+            teacher_id=teacher_id,
+            student_id=student_id,
+            issue_id=issue_id,
+            status="disabled",
+        )
+
+    def search_history(
+        self,
+        *,
+        teacher_id: str,
+        student_id: str,
+        data: bytes,
+    ) -> list[HistoryHit]:
+        opened = self.adapter.open_bytes(data)
+        paragraphs = self.adapter.list_paragraphs(opened)
+        hits: list[HistoryHit] = []
+        for issue in self.store.list_issues(
+            teacher_id=teacher_id, student_id=student_id, status="confirmed"
+        ):
+            hit = match_issue(issue, paragraphs)
+            if hit is not None:
+                hits.append(hit)
+        return hits
+
+    def review(
+        self,
+        *,
+        teacher_id: str,
+        student_id: str,
+        draft_id: str,
+        data: bytes,
+        output_dir: Path,
+        use_model: bool = False,
+        settings: AppSettings | None = None,
+        use_pi: bool = False,
+        faux: bool = False,
+    ) -> ReviewResult:
+        current = settings or load_settings(self.home)
+        warning = ""
+        should_pi = faux or use_pi or (use_model and model_available(current))
+        if should_pi:
+            try:
+                return self._review_with_pi(
+                    teacher_id=teacher_id,
+                    student_id=student_id,
+                    draft_id=draft_id,
+                    data=data,
+                    output_dir=output_dir,
+                    settings=current,
+                    faux=faux,
+                )
+            except Exception as exc:  # noqa: BLE001 - fall back to offline rules
+                warning = f"模型审查未能完成，已改用离线规则。{exc}"
+        opened = self.adapter.open_bytes(data)
+        paragraphs = self.adapter.list_paragraphs(opened)
+        tables = self.adapter.list_tables(opened)
+        findings: list[Finding] = []
+        findings.extend(check_language(paragraphs, draft_id=draft_id))
+        findings.extend(check_format(paragraphs, tables, draft_id=draft_id))
+        for hit in self.search_history(teacher_id=teacher_id, student_id=student_id, data=data):
+            issue = self.store.get(hit.issue_id)
+            findings.append(_history_finding(hit, issue, draft_id))
+        used_model = False
+        if use_model and not use_pi:
+            if model_available(current):
+                extra = suggest_language_findings(
+                    settings=current, paragraphs=paragraphs, draft_id=draft_id
+                )
+                if extra:
+                    findings.extend(extra)
+                    used_model = True
+                else:
+                    warning = warning or "模型未返回可用建议，已改用离线规则。"
+            elif not warning:
+                warning = "未配置模型密钥，已改用离线规则。"
+
+        for finding in findings:
+            if finding.apply in {"comment", "both"} and finding.anchor.startswith("P"):
+                try:
+                    self.adapter.add_comment(
+                        opened,
+                        anchor=finding.anchor,
+                        text=_comment_body(finding),
+                        author=ASSISTANT_AUTHOR,
+                    )
+                except ReviewError:
+                    continue
+        for finding in findings:
+            if finding.apply in {"revision", "both"} and finding.suggested_old and finding.suggested_new:
+                try:
+                    self.adapter.replace_tracked(
+                        opened,
+                        anchor=finding.anchor,
+                        old=finding.suggested_old,
+                        new=finding.suggested_new,
+                        author=ASSISTANT_AUTHOR,
+                    )
+                except ReviewError:
+                    continue
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        reviewed_path = output_dir / f"{draft_id}-reviewed.docx"
+        findings_path = output_dir / f"{draft_id}-findings.json"
+        self.adapter.save(opened, reviewed_path)
+        findings_path.write_text(
+            json.dumps([item.to_dict() for item in findings], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return ReviewResult(
+            reviewed_path=reviewed_path,
+            findings_path=findings_path,
+            findings=findings,
+            used_model=used_model,
+            warning=warning,
+        )
+
+    def _review_with_pi(
+        self,
+        *,
+        teacher_id: str,
+        student_id: str,
+        draft_id: str,
+        data: bytes,
+        output_dir: Path,
+        settings: AppSettings,
+        faux: bool,
+    ) -> ReviewResult:
+        from thesis_review.runtime import python_path, run_pi_review
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        source = output_dir / f"{draft_id}-source.docx"
+        source.write_bytes(data)
+        payload = run_pi_review(
+            {
+                "home": str(self.home),
+                "teacher_id": teacher_id,
+                "student_id": student_id,
+                "major": settings.major,
+                "draft_path": str(source),
+                "draft_id": draft_id,
+                "output_dir": str(output_dir),
+                "provider": settings.provider,
+                "model": settings.model or "gpt-4o-mini",
+                "api_key": settings.api_key,
+                "base_url": settings.base_url,
+                "python": sys.executable,
+                "pythonpath": python_path(),
+            },
+            faux=faux,
+        )
+        findings_path = Path(payload["findings_path"])
+        raw = json.loads(findings_path.read_text(encoding="utf-8"))
+        findings = [Finding.from_dict(item) for item in raw]
+        return ReviewResult(
+            reviewed_path=Path(payload["reviewed_path"]),
+            findings_path=findings_path,
+            findings=findings,
+            used_model=not faux,
+            warning="",
+        )
+
+
+def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Finding:
+    return Finding(
+        id=f"history-{hit.issue_id}",
+        issue_id=hit.issue_id,
+        category=issue.category,
+        source="history",
+        problem="学生在新稿中仍出现已确认的历史问题。",
+        rationale=f"历次稿件已指出：{issue.original_text}",
+        quote=hit.new_quote,
+        anchor=hit.new_anchor,
+        paragraph_index=hit.paragraph_index,
+        apply="comment",
+        draft_id=draft_id,
+        evidence=[
+            Evidence(kind="history", draft_id=issue.source_draft_id, text=issue.original_text),
+        ],
+    )
+
+
+def _comment_body(finding: Finding) -> str:
+    lines = [finding.problem, finding.rationale]
+    if finding.source == "history":
+        old = next((item.text for item in finding.evidence), "")
+        lines = [
+            f"历次稿件已指出：{old or finding.rationale}",
+            f"旧稿原文：「{finding.quote}」。",
+            "请对照修改，并补上可核验的依据。",
+        ]
+    elif finding.suggested_new:
+        lines.append(f"建议将「{finding.suggested_old}」改为「{finding.suggested_new}」。")
+    return "\n".join(line for line in lines if line)

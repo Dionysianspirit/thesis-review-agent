@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from thesis_review.errors import ReviewError
+from thesis_review.paths import repo_root
+
+
+def vendor_node() -> Path:
+    root = repo_root()
+    if os.name == "nt":
+        return root / ".vendor" / "node" / "node.exe"
+    return root / ".vendor" / "node" / "bin" / "node"
+
+
+def bundled_node() -> Path:
+    root = repo_root()
+    if os.name == "nt":
+        return root / "runtime" / "node" / "node.exe"
+    return root / "runtime" / "node" / "bin" / "node"
+
+
+def resolve_node() -> Path:
+    override = os.environ.get("THESIS_NODE_PATH")
+    if override:
+        path = Path(override)
+        if path.is_file():
+            return path.resolve()
+        raise ReviewError("node_missing", f"THESIS_NODE_PATH 不是有效文件：{override}")
+    for candidate in (bundled_node(), vendor_node()):
+        if candidate.is_file():
+            return candidate.resolve()
+    found = shutil.which("node")
+    if found:
+        return Path(found).resolve()
+    raise ReviewError("node_missing", "未找到 Node。请运行 scripts/fetch_node.py 或重新打包。")
+
+
+def agent_dir() -> Path:
+    bundled = repo_root() / "agent"
+    if (bundled / "review.mjs").is_file():
+        return bundled
+    return repo_root() / "agent"
+
+
+def agent_entry() -> Path:
+    return agent_dir() / "review.mjs"
+
+
+def python_path() -> str:
+    return str(repo_root() / "python")
+
+
+def run_agent_selftest() -> subprocess.CompletedProcess[str]:
+    node = resolve_node()
+    script = agent_entry()
+    env = os.environ.copy()
+    env["THESIS_REVIEW_ROOT"] = str(repo_root())
+    return subprocess.run(
+        [str(node), str(script), "--selftest"],
+        cwd=str(agent_dir()),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> dict:
+    node = resolve_node()
+    script = agent_entry()
+    payload = dict(request)
+    payload.setdefault("python", sys.executable)
+    payload.setdefault("pythonpath", python_path())
+    if "worker_args" not in payload:
+        if getattr(sys, "frozen", False):
+            payload["worker_args"] = [
+                "worker",
+                "--home",
+                payload["home"],
+                "--teacher",
+                payload["teacher_id"],
+                "--student",
+                payload["student_id"],
+                "--major",
+                payload.get("major") or "人工智能",
+            ]
+        else:
+            payload["worker_args"] = [
+                "-m",
+                "thesis_review.worker",
+                "--home",
+                payload["home"],
+                "--teacher",
+                payload["teacher_id"],
+                "--student",
+                payload["student_id"],
+                "--major",
+                payload.get("major") or "人工智能",
+            ]
+    request_path = Path(payload["output_dir"]) / "pi-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    command = [str(node), str(script), "--request", str(request_path)]
+    if faux:
+        command.append("--faux")
+    env = os.environ.copy()
+    env["THESIS_REVIEW_ROOT"] = str(repo_root())
+    env["PYTHONPATH"] = python_path()
+    env["PYTHONIOENCODING"] = "utf-8"
+    if request.get("api_key"):
+        env["THESIS_API_KEY"] = str(request["api_key"])
+        env["OPENAI_API_KEY"] = str(request["api_key"])
+    if request.get("base_url"):
+        env["THESIS_BASE_URL"] = str(request["base_url"])
+    result = subprocess.run(
+        command,
+        cwd=str(agent_dir()),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ReviewError("pi_failed", result.stderr.strip() or result.stdout.strip() or "pi 进程失败")
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    return payload

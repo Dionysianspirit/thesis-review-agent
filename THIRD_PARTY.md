@@ -4,7 +4,8 @@ This repository's original documents and probe scripts use the MIT license. A li
 
 | Project | Checked license | Use here |
 | --- | --- | --- |
-| [Pi](https://github.com/earendil-works/pi) | MIT | Planned integration; no implementation vendored |
+| [Pi](https://github.com/earendil-works/pi) | MIT | Bundled via npm `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai` 0.85.1 |
+| [Node.js](https://nodejs.org/) | MIT | Portable Windows runtime fetched at package time; not committed |
 | [DocxEngine](https://github.com/ruwadgroup/docxengine) | Apache-2.0 | Optional fixed-commit test download; its LICENSE and NOTICE are preserved in the ignored vendor directory |
 | [python-docx](https://github.com/python-openxml/python-docx) | MIT | Probe dependency |
 | [pytest](https://github.com/pytest-dev/pytest) | MIT | Upstream test dependency |
