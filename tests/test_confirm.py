@@ -1,14 +1,15 @@
-"""Model confirmation after string recall can drop a heading-only false repeat."""
+"""String recall stays deterministic; Python no longer httpx-confirms history hits."""
 from __future__ import annotations
 
 from pathlib import Path
 
 from tests.helpers import sample_history_v1, sample_new_draft, sample_same_heading_fixed_body
-from thesis_review.history.confirm import HitConfirmation, keep_confirmed_hit
+from thesis_review.history.confirm import keep_confirmed_hit
 from thesis_review.history.store import HistoryStore
 from thesis_review.service import ThesisReviewService
-from thesis_review.settings import AppSettings
 from thesis_review.word.adapter import WordAdapter
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_keep_rejects_when_model_says_different_issue():
@@ -78,12 +79,12 @@ def test_offline_review_still_writes_history_without_a_key(tmp_path: Path):
         output_dir=tmp_path / "out",
         use_model=False,
     )
-    assert any(item.source == "history" for item in result.findings)
+    sources = {item.source for item in result.findings}
+    assert "history" in sources
+    assert "model" not in sources
 
 
-def test_model_reject_drops_history_when_heading_stays_and_body_changed(
-    tmp_path: Path, monkeypatch
-):
+def test_string_recall_still_hits_unchanged_heading(tmp_path: Path):
     service = ThesisReviewService(
         store=HistoryStore(tmp_path / "history.sqlite"),
         adapter=WordAdapter(),
@@ -105,58 +106,22 @@ def test_model_reject_drops_history_when_heading_stays_and_body_changed(
     )
     assert hits, "V0.2 string recall should still hit the unchanged heading"
 
-    monkeypatch.setattr(
-        "thesis_review.history.confirm.confirm_history_hit",
-        lambda **_kwargs: HitConfirmation(
-            same_issue=False,
-            confidence=0.91,
-            quote="3.1 实验设计",
-            rationale="标题未改，实验步骤已补。",
-        ),
-    )
-    findings = service.history_findings(
-        teacher_id="teacher-a",
-        student_id="zhou",
-        data=sample_same_heading_fixed_body(history=False),
-        draft_id="new",
-        settings=AppSettings(api_key="sk-test", model="gpt-4o-mini"),
-        confirm_with_model=True,
-    )
-    assert findings == []
 
-
-def test_model_accept_keeps_history_finding(tmp_path: Path, monkeypatch):
-    service = ThesisReviewService(
-        store=HistoryStore(tmp_path / "history.sqlite"),
-        adapter=WordAdapter(),
-        home=tmp_path,
+def test_pi_review_path_does_not_call_python_httpx_confirm():
+    worker = (ROOT / "python" / "thesis_review" / "worker.py").read_text(encoding="utf-8")
+    service = (ROOT / "python" / "thesis_review" / "service.py").read_text(encoding="utf-8")
+    llm = (ROOT / "python" / "thesis_review" / "llm.py").read_text(encoding="utf-8")
+    confirm = (ROOT / "python" / "thesis_review" / "history" / "confirm.py").read_text(
+        encoding="utf-8"
     )
-    candidates = service.ingest_history(
-        teacher_id="teacher-a",
-        student_id="zhou",
-        major="人工智能",
-        draft_id="v1",
-        data=sample_history_v1(),
-    )
-    subjective = next(item for item in candidates if "主观评价" in item.original_text)
-    service.confirm_issue(teacher_id="teacher-a", student_id="zhou", issue_id=subjective.id)
-    monkeypatch.setattr(
-        "thesis_review.history.confirm.confirm_history_hit",
-        lambda **_kwargs: HitConfirmation(
-            same_issue=True,
-            confidence=0.88,
-            quote="本研究非常非常有效。",
-            rationale="仍缺实验依据。",
-        ),
-    )
-    findings = service.history_findings(
-        teacher_id="teacher-a",
-        student_id="zhou",
-        data=sample_new_draft(),
-        draft_id="new",
-        settings=AppSettings(api_key="sk-test", model="gpt-4o-mini"),
-        confirm_with_model=True,
-    )
-    assert len(findings) == 1
-    assert findings[0].source == "history"
-    assert findings[0].issue_id == subjective.id
+    agent = (ROOT / "agent" / "review.mjs").read_text(encoding="utf-8")
+    assert "confirm_history_hit" not in worker
+    assert "confirm_history_hit" not in service
+    assert "suggest_language_findings" not in worker
+    assert "suggest_language_findings" not in service
+    assert "suggest_language_findings" not in llm
+    assert "httpx" not in confirm
+    assert "httpx" not in llm
+    assert "confirm_history_hit" not in agent
+    assert "get_history_candidates" in agent
+    assert "confirm_history_finding" in agent

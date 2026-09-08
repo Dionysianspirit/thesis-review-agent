@@ -10,11 +10,31 @@ from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.cli import build_service
 from thesis_review.errors import ReviewError
-from thesis_review.llm import model_available
-from thesis_review.service import ASSISTANT_AUTHOR, _comment_body
-from thesis_review.settings import load_settings
-from thesis_review.types import Finding
+from thesis_review.history.match import HEADING_RE, match_issue, normalize
+from thesis_review.service import ASSISTANT_AUTHOR, _comment_body, _history_finding
+from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ParagraphView
 from thesis_review.word.adapter import OpenedDocument, WordAdapter
+
+NAV_OPS = frozenset({"list_outline", "read_section", "read_paragraphs", "find_text"})
+NAV_BUDGET = 12
+MAX_READ_PARAS = 8
+MAX_READ_CHARS = 2000
+MAX_ARGUMENT_FINDINGS = 3
+MAX_FIND_HITS = 5
+OUTLINE_TEXT_LIMIT = 80
+FIND_CONTEXT = 40
+NAMED_HEADINGS = (
+    "摘要",
+    "绪论",
+    "引言",
+    "相关工作",
+    "研究方法",
+    "实验",
+    "实验结果",
+    "结果与分析",
+    "结论",
+    "参考文献",
+)
 
 
 class Worker:
@@ -28,8 +48,14 @@ class Worker:
         self.opened: OpenedDocument | None = None
         self.original: bytes = b""
         self.findings: list[Finding] = []
+        self.nav_calls = 0
+        self.argument_count = 0
 
     def dispatch(self, op: str, params: dict) -> dict:
+        if op in NAV_OPS:
+            if self.nav_calls >= NAV_BUDGET:
+                raise ReviewError("nav_budget", "导航次数已达上限，只能记录论证发现或提交审改。")
+            self.nav_calls += 1
         handler = getattr(self, f"op_{op}", None)
         if handler is None:
             raise ReviewError("unknown_op", f"未知操作：{op}")
@@ -45,6 +71,8 @@ class Worker:
         self.original = data
         self.opened = self.adapter.open_bytes(data)
         self.findings = []
+        self.nav_calls = 0
+        self.argument_count = 0
         paragraphs = self.adapter.list_paragraphs(self.opened)
         return {"n_paragraphs": len(paragraphs)}
 
@@ -66,32 +94,178 @@ class Worker:
         self.findings.extend(findings)
         return {"findings": [item.to_dict() for item in findings]}
 
-    def op_search_history(self, params: dict) -> dict:
+    def op_get_history_candidates(self, params: dict) -> dict:
         self._require_open()
-        settings = load_settings(self.home)
-        extra = self.service.history_findings(
+        hits = self.service.search_history(
             teacher_id=self.teacher_id,
             student_id=self.student_id,
             data=self.original,
-            draft_id=str(params.get("draft_id") or "new"),
-            settings=settings,
-            confirm_with_model=model_available(settings),
         )
-        self._apply(extra)
-        self.findings.extend(extra)
-        return {
-            "hits": [
+        candidates = []
+        for hit in hits:
+            issue = self.service.store.get(hit.issue_id)
+            candidates.append(_candidate_payload(hit, issue))
+        return {"candidates": candidates}
+
+    def op_confirm_history_finding(self, params: dict) -> dict:
+        self._require_open()
+        issue_id = str(params.get("issue_id") or "").strip()
+        new_quote = str(params.get("new_quote") or params.get("claim") or "").strip()
+        draft_id = str(params.get("draft_id") or "new")
+        if not new_quote:
+            raise ReviewError("missing_quote", "缺少新稿原文，未写入批注。")
+        issue = self._confirmed_issue(issue_id)
+        if not _history_text_on_record(issue.original_span, issue) and not self._quote_in_source_or_opened(
+            issue.original_span
+        ):
+            raise ReviewError("issue_mismatch", "旧稿原文与记录对不上，未写入批注。")
+        if not _history_text_on_record(issue.original_text, issue) and not self._quote_in_source_or_opened(
+            issue.original_text
+        ):
+            raise ReviewError("issue_mismatch", "旧稿批注与记录对不上，未写入批注。")
+        original_paras = self._original_paragraphs()
+        source_para = _paragraph_with_quote(new_quote, original_paras)
+        if source_para is None and self._paragraph_with_quote(new_quote) is None:
+            raise ReviewError("quote_not_in_draft", "新稿原文不在稿件中，未写入批注。")
+        hit = match_issue(issue, original_paras)
+        if hit is None or new_quote not in hit.new_quote:
+            raise ReviewError("quote_not_in_draft", "新稿原文与历史召回位置对不上，未写入批注。")
+        quote_para = self._paragraph_with_quote(new_quote)
+        if quote_para is None:
+            quote_para = next((item for item in self._paragraphs() if item.ordinal == hit.paragraph_index), None)
+        if quote_para is None:
+            raise ReviewError("quote_not_in_draft", "新稿原文不在稿件中，未写入批注。")
+        finding = _history_finding(
+            HistoryHit(
+                issue_id=issue.id,
+                new_anchor=quote_para.anchor,
+                new_quote=new_quote,
+                paragraph_index=quote_para.ordinal,
+                evidence_text=issue.original_text,
+                original_span=issue.original_span or hit.original_span,
+                category=issue.category,
+            ),
+            issue,
+            draft_id,
+        )
+        self._apply([finding])
+        self.findings.append(finding)
+        return {"ok": True, "id": finding.id}
+
+    def _confirmed_issue(self, issue_id: str) -> IssueRecord:
+        if not issue_id:
+            raise ReviewError("issue_mismatch", "缺少历史问题编号，未写入批注。")
+        try:
+            issue = self.service.store.get(issue_id)
+        except KeyError as exc:
+            raise ReviewError("issue_mismatch", "历史问题不存在，未写入批注。") from exc
+        if (
+            issue.teacher_id != self.teacher_id
+            or issue.student_id != self.student_id
+            or issue.status != "confirmed"
+        ):
+            raise ReviewError("issue_mismatch", "历史问题不属于当前师生或尚未确认，未写入批注。")
+        return issue
+
+    def op_list_outline(self, params: dict) -> dict:
+        outline = []
+        for item in self._paragraphs():
+            if not _is_outline_heading(item.text):
+                continue
+            outline.append(
                 {
-                    "issue_id": item.issue_id,
-                    "quote": item.quote,
-                    "evidence": next(
-                        (row.text for row in item.evidence if row.kind == "history"),
-                        item.rationale,
-                    ),
+                    "ordinal": item.ordinal,
+                    "anchor": item.anchor,
+                    "text": item.text[:OUTLINE_TEXT_LIMIT],
                 }
-                for item in extra
-            ]
-        }
+            )
+        return {"outline": outline}
+
+    def op_read_paragraphs(self, params: dict) -> dict:
+        start = _require_ordinal(params)
+        limit = int(params.get("limit") or MAX_READ_PARAS)
+        selected = [item for item in self._paragraphs() if item.ordinal >= start]
+        paragraphs, truncated = _clip_paragraphs(selected, limit=limit)
+        return {"paragraphs": paragraphs, "truncated": truncated}
+
+    def op_read_section(self, params: dict) -> dict:
+        start = _require_ordinal(params)
+        limit = int(params.get("limit") or MAX_READ_PARAS)
+        items = self._paragraphs()
+        end = next(
+            (
+                item.ordinal
+                for item in items
+                if item.ordinal > start and _is_outline_heading(item.text)
+            ),
+            None,
+        )
+        selected = [
+            item
+            for item in items
+            if item.ordinal >= start and (end is None or item.ordinal < end)
+        ]
+        paragraphs, truncated = _clip_paragraphs(selected, limit=limit)
+        return {"paragraphs": paragraphs, "truncated": truncated}
+
+    def op_find_text(self, params: dict) -> dict:
+        needle = str(params.get("needle") or "").strip()
+        if not needle:
+            raise ReviewError("invalid_params", "缺少检索词。")
+        max_hits = min(int(params.get("max_hits") or MAX_FIND_HITS), MAX_FIND_HITS)
+        hits: list[dict] = []
+        for item in self._paragraphs():
+            index = item.text.find(needle)
+            if index < 0:
+                continue
+            start = max(0, index - FIND_CONTEXT)
+            stop = min(len(item.text), index + len(needle) + FIND_CONTEXT)
+            hits.append(
+                {
+                    "ordinal": item.ordinal,
+                    "anchor": item.anchor,
+                    "snippet": item.text[start:stop],
+                }
+            )
+            if len(hits) >= max_hits:
+                break
+        return {"hits": hits}
+
+    def op_record_argument_finding(self, params: dict) -> dict:
+        claim = str(params.get("claim_quote") or "").strip()
+        evidence = str(params.get("evidence_quote") or "").strip()
+        problem = str(params.get("problem") or "").strip()
+        rationale = str(params.get("rationale") or "").strip()
+        draft_id = str(params.get("draft_id") or "new")
+        if self.argument_count >= MAX_ARGUMENT_FINDINGS:
+            raise ReviewError("argument_limit", "论证发现已达上限。")
+        if "再次" in f"{problem}\n{rationale}" or "屡次" in f"{problem}\n{rationale}":
+            raise ReviewError("repeat_wording", "论证批注不能使用「再次」「屡次」。")
+        claim_para = self._paragraph_with_quote(claim)
+        evidence_para = self._paragraph_with_quote(evidence)
+        if claim_para is None or evidence_para is None:
+            raise ReviewError("quote_not_in_draft", "主张或证据原文不在稿件中，未写入批注。")
+        self.argument_count += 1
+        finding = Finding(
+            id=f"argument-{self.argument_count}",
+            category="B",
+            source="argument",
+            code="claim_without_evidence",
+            problem=problem or "关键主张缺少与用词相符的实验证据。",
+            rationale=rationale or "对照实验或结果原文后，主张未能被数据支持。",
+            quote=claim,
+            anchor=claim_para.anchor,
+            paragraph_index=claim_para.ordinal,
+            apply="comment",
+            draft_id=draft_id,
+            evidence=[
+                Evidence(kind="claim", draft_id=draft_id, text=claim),
+                Evidence(kind="evidence", draft_id=draft_id, text=evidence),
+            ],
+        )
+        self._apply([finding])
+        self.findings.append(finding)
+        return {"ok": True, "id": finding.id}
 
     def op_add_comment(self, params: dict) -> dict:
         opened = self._require_open()
@@ -137,6 +311,22 @@ class Worker:
             raise ReviewError("not_open", "尚未打开稿件。")
         return self.opened
 
+    def _paragraphs(self) -> list[ParagraphView]:
+        return self.adapter.list_paragraphs(self._require_open())
+
+    def _original_paragraphs(self) -> list[ParagraphView]:
+        return self.adapter.list_paragraphs(self.adapter.open_bytes(self.original))
+
+    def _paragraph_with_quote(self, quote: str) -> ParagraphView | None:
+        return _paragraph_with_quote(quote, self._paragraphs())
+
+    def _quote_in_source_or_opened(self, quote: str) -> bool:
+        if not quote:
+            return True
+        if _paragraph_with_quote(quote, self._original_paragraphs()) is not None:
+            return True
+        return self._paragraph_with_quote(quote) is not None
+
     def _apply(self, findings: list[Finding]) -> None:
         opened = self._require_open()
         for finding in findings:
@@ -162,6 +352,74 @@ class Worker:
                     )
                 except ReviewError:
                     continue
+
+
+def _paragraph_with_quote(quote: str, paragraphs: list[ParagraphView]) -> ParagraphView | None:
+    if not quote:
+        return None
+    for item in paragraphs:
+        if quote in item.text:
+            return item
+    return None
+
+
+def _candidate_payload(hit: HistoryHit, issue: IssueRecord) -> dict:
+    return {
+        "issue_id": hit.issue_id,
+        "category": issue.category,
+        "problem": issue.problem or issue.original_text,
+        "original_text": issue.original_text,
+        "old_span": issue.original_span or hit.original_span,
+        "new_quote": hit.new_quote,
+        "new_anchor": hit.new_anchor,
+        "issue_type": issue.issue_type,
+        "scope": issue.scope,
+        "teacher_intent": issue.teacher_intent,
+        "expected_fix": issue.suggested_fix,
+    }
+
+
+def _history_text_on_record(text: str, issue: IssueRecord) -> bool:
+    value = (text or "").strip()
+    if not value:
+        return True
+    return value in {issue.original_span, issue.original_text, issue.problem}
+
+
+def _is_outline_heading(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if HEADING_RE.match(stripped) and len(normalize(stripped)) <= 40:
+        return True
+    compact = normalize(stripped)
+    return compact in {normalize(name) for name in NAMED_HEADINGS}
+
+
+def _require_ordinal(params: dict) -> int:
+    if "start_ordinal" not in params:
+        raise ReviewError("invalid_params", "缺少 start_ordinal。")
+    return int(params["start_ordinal"])
+
+
+def _clip_paragraphs(items: list[ParagraphView], *, limit: int) -> tuple[list[dict], bool]:
+    cap = max(1, min(int(limit), MAX_READ_PARAS))
+    selected: list[dict] = []
+    chars = 0
+    for item in items:
+        if len(selected) >= cap or chars >= MAX_READ_CHARS:
+            return selected, True
+        text = item.text
+        if chars + len(text) > MAX_READ_CHARS:
+            remain = MAX_READ_CHARS - chars
+            if remain > 0:
+                selected.append(
+                    {"ordinal": item.ordinal, "anchor": item.anchor, "text": text[:remain]}
+                )
+            return selected, True
+        selected.append({"ordinal": item.ordinal, "anchor": item.anchor, "text": text})
+        chars += len(text)
+    return selected, False
 
 
 def _handle_line(worker: Worker, line: str) -> str:

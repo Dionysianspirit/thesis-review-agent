@@ -5,6 +5,29 @@ import io
 
 from docx import Document
 
+from thesis_review.fixtures import (
+    OVERCLAIM_CLAIM_QUOTE,
+    OVERCLAIM_EVIDENCE_QUOTE,
+    SUPPORTED_CLAIM_QUOTE,
+    SUPPORTED_EVIDENCE_QUOTE,
+    overclaim_draft as sample_overclaim_draft,
+    supported_claim_draft as sample_supported_claim_draft,
+)
+
+__all__ = [
+    "OVERCLAIM_CLAIM_QUOTE",
+    "OVERCLAIM_EVIDENCE_QUOTE",
+    "SUPPORTED_CLAIM_QUOTE",
+    "SUPPORTED_EVIDENCE_QUOTE",
+    "sample_history_v1",
+    "sample_history_v2",
+    "sample_same_heading_fixed_body",
+    "sample_new_draft",
+    "sample_overclaim_draft",
+    "sample_supported_claim_draft",
+    "sample_long_section_draft",
+]
+
 
 def sample_history_v1() -> bytes:
     doc = Document()
@@ -42,6 +65,16 @@ def sample_same_heading_fixed_body(*, history: bool) -> bytes:
         doc.add_paragraph("本节尚未展开。")
     else:
         doc.add_paragraph("本节给出数据集划分、训练轮次与准确率、F1 两项评价指标。")
+    return _save(doc)
+
+
+def sample_long_section_draft() -> bytes:
+    doc = Document()
+    doc.add_paragraph("1 实验")
+    for index in range(20):
+        doc.add_paragraph(f"实验步骤说明段落{index:02d}，补充若干占位文字以便超过单次读取上限。")
+    doc.add_paragraph("2 结论")
+    doc.add_paragraph("结论段落仅作导航边界。")
     return _save(doc)
 
 

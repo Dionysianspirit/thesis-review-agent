@@ -5,6 +5,11 @@ from pathlib import Path
 
 from docx import Document
 
+OVERCLAIM_CLAIM_QUOTE = "实验结果表明该方法显著提升了分类准确率。"
+OVERCLAIM_EVIDENCE_QUOTE = "准确率由 0.81 提高到 0.83。"
+SUPPORTED_CLAIM_QUOTE = "实验结果表明准确率达到 0.91，显著高于基线 0.72。"
+SUPPORTED_EVIDENCE_QUOTE = "准确率为 0.91，基线模型为 0.72。配对检验 p<0.01。"
+
 
 def write_demo_drafts(directory: Path) -> dict[str, Path]:
     directory.mkdir(parents=True, exist_ok=True)
@@ -18,7 +23,42 @@ def write_demo_drafts(directory: Path) -> dict[str, Path]:
         path = directory / f"{name}.docx"
         path.write_bytes(data)
         paths[name] = path
+    (directory / "overclaim.docx").write_bytes(overclaim_draft())
     return paths
+
+
+def overclaim_draft() -> bytes:
+    """Conclusion overclaims a tiny accuracy bump with no significance test."""
+    doc = Document()
+    doc.add_paragraph("本科毕业论文")
+    doc.add_paragraph("1 摘要")
+    doc.add_paragraph("本文研究一种用于图像分类的卷积神经网络方法。")
+    doc.add_paragraph("2 方法")
+    doc.add_paragraph("本文使用卷积神经网络提取图像特征并完成分类。")
+    doc.add_paragraph("3 实验结果")
+    doc.add_paragraph(f"在测试集上，{OVERCLAIM_EVIDENCE_QUOTE}未报告显著性检验，也未给出基线对照。")
+    doc.add_paragraph("4 结论")
+    doc.add_paragraph(OVERCLAIM_CLAIM_QUOTE)
+    doc.add_paragraph("参考文献")
+    doc.add_paragraph("[1] 张三. 示例文献. 期刊, 2024.")
+    return _save(doc)
+
+
+def supported_claim_draft() -> bytes:
+    """Conclusion claim is backed by a baseline and a significance test."""
+    doc = Document()
+    doc.add_paragraph("本科毕业论文")
+    doc.add_paragraph("1 摘要")
+    doc.add_paragraph("本文研究一种用于图像分类的卷积神经网络方法。")
+    doc.add_paragraph("2 方法")
+    doc.add_paragraph("本文使用卷积神经网络提取图像特征并完成分类。")
+    doc.add_paragraph("3 实验结果")
+    doc.add_paragraph(SUPPORTED_EVIDENCE_QUOTE)
+    doc.add_paragraph("4 结论")
+    doc.add_paragraph(SUPPORTED_CLAIM_QUOTE)
+    doc.add_paragraph("参考文献")
+    doc.add_paragraph("[1] 张三. 示例文献. 期刊, 2024.")
+    return _save(doc)
 
 
 def _history_v1() -> bytes:

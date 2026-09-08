@@ -5,7 +5,7 @@ from pathlib import Path
 
 from docx import Document
 
-from tests.helpers import sample_history_v1, sample_new_draft
+from tests.helpers import sample_history_v1, sample_new_draft, sample_overclaim_draft
 from thesis_review.history.store import HistoryStore
 from thesis_review.service import ThesisReviewService
 from thesis_review.word.adapter import WordAdapter
@@ -50,3 +50,20 @@ def test_offline_review_labels_history_and_rule_findings(tmp_path: Path):
     texts = [comment.text for comment in comments]
     assert any("历次" in text or "已指出" in text for text in texts)
     assert any(comment.author == "审改助手" for comment in comments)
+
+
+def test_offline_review_has_no_argument_source(tmp_path: Path):
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="overclaim",
+        data=sample_overclaim_draft(),
+        output_dir=tmp_path / "out",
+        use_model=False,
+    )
+    assert all(item.source != "argument" for item in result.findings)

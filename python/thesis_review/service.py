@@ -7,11 +7,10 @@ from pathlib import Path
 from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.errors import ReviewError
-from thesis_review.history import confirm as history_confirm
 from thesis_review.history.ingest import issues_from_comments, issues_from_revisions, persist
 from thesis_review.history.match import match_issue
 from thesis_review.history.store import HistoryStore
-from thesis_review.llm import model_available, suggest_language_findings
+from thesis_review.llm import model_available
 from thesis_review.settings import AppSettings, load_settings
 from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ReviewResult
 from thesis_review.word.adapter import WordAdapter
@@ -100,19 +99,10 @@ class ThesisReviewService:
         student_id: str,
         data: bytes,
         draft_id: str,
-        settings: AppSettings | None = None,
-        confirm_with_model: bool = False,
     ) -> list[Finding]:
         hits = self.search_history(
             teacher_id=teacher_id, student_id=student_id, data=data
         )
-        current = settings or load_settings(self.home)
-        if confirm_with_model and model_available(current):
-            hits = [
-                hit
-                for hit in hits
-                if _keep_history_hit(hit, self.store.get(hit.issue_id), current)
-            ]
         return [_history_finding(hit, self.store.get(hit.issue_id), draft_id) for hit in hits]
 
     def review(
@@ -127,6 +117,7 @@ class ThesisReviewService:
         settings: AppSettings | None = None,
         use_pi: bool = False,
         faux: bool = False,
+        faux_scenario: str = "",
     ) -> ReviewResult:
         current = settings or load_settings(self.home)
         warning = ""
@@ -141,6 +132,7 @@ class ThesisReviewService:
                     output_dir=output_dir,
                     settings=current,
                     faux=faux,
+                    faux_scenario=faux_scenario,
                 )
             except Exception as exc:  # noqa: BLE001 - fall back to offline rules
                 warning = f"模型审查未能完成，已改用离线规则。{exc}"
@@ -156,23 +148,11 @@ class ThesisReviewService:
                 student_id=student_id,
                 data=data,
                 draft_id=draft_id,
-                settings=current,
-                confirm_with_model=use_model and model_available(current),
             )
         )
         used_model = False
-        if use_model and not use_pi:
-            if model_available(current):
-                extra = suggest_language_findings(
-                    settings=current, paragraphs=paragraphs, draft_id=draft_id
-                )
-                if extra:
-                    findings.extend(extra)
-                    used_model = True
-                else:
-                    warning = warning or "模型未返回可用建议，已改用离线规则。"
-            elif not warning:
-                warning = "未配置模型密钥，已改用离线规则。"
+        if use_model and not warning and not model_available(current):
+            warning = "未配置模型密钥，已改用离线规则。"
 
         for finding in findings:
             if finding.apply in {"comment", "both"} and finding.anchor.startswith("P"):
@@ -224,6 +204,7 @@ class ThesisReviewService:
         output_dir: Path,
         settings: AppSettings,
         faux: bool,
+        faux_scenario: str = "",
     ) -> ReviewResult:
         from thesis_review.runtime import python_path, run_pi_review
 
@@ -245,6 +226,7 @@ class ThesisReviewService:
                 "base_url": settings.base_url,
                 "python": sys.executable,
                 "pythonpath": python_path(),
+                "faux_scenario": faux_scenario,
             },
             faux=faux,
         )
@@ -258,23 +240,6 @@ class ThesisReviewService:
             used_model=not faux,
             warning="",
         )
-
-
-def _keep_history_hit(hit: HistoryHit, issue: IssueRecord, settings: AppSettings) -> bool:
-    confirmation = history_confirm.confirm_history_hit(
-        settings=settings, issue=issue, hit=hit
-    )
-    if confirmation is None:
-        return True
-    return history_confirm.keep_confirmed_hit(
-        {
-            "same_issue": confirmation.same_issue,
-            "confidence": confirmation.confidence,
-            "quote": confirmation.quote,
-            "rationale": confirmation.rationale,
-        },
-        hit.new_quote,
-    )
 
 
 def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Finding:
@@ -312,6 +277,13 @@ def _comment_body(finding: Finding) -> str:
         if finding.quote:
             lines.append(f"本稿对应位置：「{finding.quote}」。")
         lines.append("请对照修改，并补上可核验的依据。")
+    elif finding.source == "argument":
+        evidence = next((item.text for item in finding.evidence if item.kind == "evidence"), "")
+        lines = [finding.problem, finding.rationale]
+        if finding.quote:
+            lines.append(f"主张：「{finding.quote}」。")
+        if evidence:
+            lines.append(f"对照证据：「{evidence}」。")
     elif finding.suggested_new:
         lines.append(f"建议将「{finding.suggested_old}」改为「{finding.suggested_new}」。")
     return "\n".join(line for line in lines if line)
