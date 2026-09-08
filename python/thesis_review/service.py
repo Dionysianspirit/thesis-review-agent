@@ -121,7 +121,8 @@ class ThesisReviewService:
     ) -> ReviewResult:
         current = settings or load_settings(self.home)
         warning = ""
-        should_pi = faux or use_pi or (use_model and model_available(current))
+        semantic = use_model and model_available(current)
+        should_pi = faux or use_pi or semantic
         if should_pi:
             try:
                 return self._review_with_pi(
@@ -136,20 +137,23 @@ class ThesisReviewService:
                 )
             except Exception as exc:  # noqa: BLE001 - fall back to offline rules
                 warning = f"模型审查未能完成，已改用离线规则。{exc}"
+                if semantic:
+                    warning += " 历史问题未经确认，未写成复犯。"
         opened = self.adapter.open_bytes(data)
         paragraphs = self.adapter.list_paragraphs(opened)
         tables = self.adapter.list_tables(opened)
         findings: list[Finding] = []
         findings.extend(check_language(paragraphs, draft_id=draft_id))
         findings.extend(check_format(paragraphs, tables, draft_id=draft_id))
-        findings.extend(
-            self.history_findings(
-                teacher_id=teacher_id,
-                student_id=student_id,
-                data=data,
-                draft_id=draft_id,
+        if not (semantic and warning):
+            findings.extend(
+                self.history_findings(
+                    teacher_id=teacher_id,
+                    student_id=student_id,
+                    data=data,
+                    draft_id=draft_id,
+                )
             )
-        )
         used_model = False
         if use_model and not warning and not model_available(current):
             warning = "未配置模型密钥，已改用离线规则。"

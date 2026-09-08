@@ -8,6 +8,7 @@ from docx import Document
 from tests.helpers import sample_history_v1, sample_new_draft, sample_overclaim_draft
 from thesis_review.history.store import HistoryStore
 from thesis_review.service import ThesisReviewService
+from thesis_review.settings import AppSettings
 from thesis_review.word.adapter import WordAdapter
 
 
@@ -67,3 +68,41 @@ def test_offline_review_has_no_argument_source(tmp_path: Path):
         use_model=False,
     )
     assert all(item.source != "argument" for item in result.findings)
+
+
+def test_pi_failure_with_key_skips_history_but_keeps_rules(tmp_path: Path, monkeypatch):
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    candidates = service.ingest_history(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        major="人工智能",
+        draft_id="v1",
+        data=sample_history_v1(),
+    )
+    subjective = next(item for item in candidates if "主观评价" in item.original_text)
+    service.confirm_issue(teacher_id="teacher-a", student_id="zhou", issue_id=subjective.id)
+
+    def _boom(self, **_kwargs):
+        raise RuntimeError("pi down")
+
+    monkeypatch.setattr(ThesisReviewService, "_review_with_pi", _boom)
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="new",
+        data=sample_new_draft(),
+        output_dir=tmp_path / "out",
+        use_model=True,
+        settings=AppSettings(api_key="sk-test", model="gpt-4o-mini"),
+    )
+    sources = {item.source for item in result.findings}
+    assert "history" not in sources
+    assert "rule" in sources
+    assert "argument" not in sources
+    assert result.warning
+    assert "复犯" in result.warning or "历史" in result.warning or "离线" in result.warning
+
