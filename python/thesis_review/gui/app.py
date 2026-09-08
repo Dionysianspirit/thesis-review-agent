@@ -24,6 +24,14 @@ class Bridge:
         self.reviewed_path = ""
         self.output_dir = str(self._default_output())
         self.status = "准备就绪。"
+        self.findings: list[dict] = []
+        self.recall: dict = self._empty_recall()
+        self.used_model = False
+        self.warning = ""
+
+    @staticmethod
+    def _empty_recall() -> dict:
+        return {"confirmed": 0, "recalled": 0, "written": 0, "skipped": [], "absent": []}
 
     def state(self) -> dict:
         issues = [
@@ -40,6 +48,10 @@ class Bridge:
                 "reviewed_path": self.reviewed_path,
                 "output_dir": self.output_dir,
                 "status": self.status,
+                "findings": self.findings,
+                "recall": self.recall,
+                "used_model": self.used_model,
+                "warning": self.warning,
             }
         )
         return payload
@@ -118,25 +130,91 @@ class Bridge:
         if not files:
             return {"ok": False, "message": "未选择新稿。"}
         path = Path(files[0])
+        data = path.read_bytes()
         output_dir = self._default_output()
+        confirmed = self.service.store.list_issues(
+            teacher_id=self.settings.teacher_id,
+            student_id=self.settings.student_id,
+            status="confirmed",
+        )
+        try:
+            hits = self.service.search_history(
+                teacher_id=self.settings.teacher_id,
+                student_id=self.settings.student_id,
+                data=data,
+            )
+        except Exception:  # noqa: BLE001 - recall snapshot is best-effort
+            hits = []
+        recalled_ids = {hit.issue_id for hit in hits}
         try:
             result = self.service.review(
                 teacher_id=self.settings.teacher_id,
                 student_id=self.settings.student_id,
                 draft_id=path.stem or "new",
-                data=path.read_bytes(),
+                data=data,
                 output_dir=output_dir,
                 use_model=bool(self.settings.api_key),
                 settings=self.settings,
             )
         except Exception as exc:  # noqa: BLE001 - surface to teachers
             self.status = f"审查失败：{exc}"
+            self.findings = []
+            self.recall = self._empty_recall()
+            self.warning = ""
             return {"ok": False, "message": self.status}
+        written_ids = {item.issue_id for item in result.findings if item.issue_id}
+        skipped = []
+        for hit in hits:
+            if hit.issue_id in written_ids:
+                continue
+            issue = self.service.store.get(hit.issue_id)
+            if result.warning:
+                reason = "模型审查未完成，按规则不把字符串命中写成复犯。"
+            else:
+                reason = "在新稿中召回了相似原文，但未判定为复犯（可能已修复或依据不足），未写入批注。"
+            skipped.append(
+                {
+                    "issue_id": hit.issue_id,
+                    "category": issue.category,
+                    "problem": issue.problem or issue.original_text,
+                    "original_text": issue.original_text,
+                    "new_quote": hit.new_quote,
+                    "reason": reason,
+                }
+            )
+        absent = [
+            {
+                "issue_id": issue.id,
+                "category": issue.category,
+                "problem": issue.problem or issue.original_text,
+                "original_text": issue.original_text,
+                "reason": "本次未在新稿中发现对应原文（可能已改正）。",
+            }
+            for issue in confirmed
+            if issue.id not in recalled_ids
+        ]
+        self.recall = {
+            "confirmed": len(confirmed),
+            "recalled": len(recalled_ids),
+            "written": len(written_ids),
+            "skipped": skipped,
+            "absent": absent,
+        }
+        self.findings = [item.to_dict() for item in result.findings]
+        self.used_model = result.used_model
+        self.warning = result.warning or ""
         self.reviewed_path = str(result.reviewed_path)
         self.output_dir = str(output_dir)
         extra = result.warning or ""
         self.status = f"完成，共 {len(result.findings)} 条建议。{extra}".strip()
-        return {"ok": True, "message": self.status}
+        return {
+            "ok": True,
+            "message": self.status,
+            "findings": self.findings,
+            "recall": self.recall,
+            "used_model": self.used_model,
+            "warning": self.warning,
+        }
 
     def open_reviewed(self) -> dict:
         if not self.reviewed_path:
