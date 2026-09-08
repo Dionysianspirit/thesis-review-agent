@@ -245,6 +245,11 @@ def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Find
         draft_id=draft_id,
         evidence=[
             Evidence(kind="history", draft_id=issue.source_draft_id, text=issue.original_text),
+            Evidence(
+                kind="history_span",
+                draft_id=issue.source_draft_id,
+                text=issue.original_span or hit.original_span,
+            ),
         ],
     )
 
@@ -252,12 +257,14 @@ def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Find
 def _comment_body(finding: Finding) -> str:
     lines = [finding.problem, finding.rationale]
     if finding.source == "history":
-        old = next((item.text for item in finding.evidence), "")
-        lines = [
-            f"历次稿件已指出：{old or finding.rationale}",
-            f"旧稿原文：「{finding.quote}」。",
-            "请对照修改，并补上可核验的依据。",
-        ]
+        comment = next((item.text for item in finding.evidence if item.kind == "history"), "")
+        old_span = next((item.text for item in finding.evidence if item.kind == "history_span"), "")
+        lines = [f"历次稿件已指出：{comment or finding.rationale}"]
+        if old_span:
+            lines.append(f"旧稿原文：「{old_span}」。")
+        if finding.quote:
+            lines.append(f"本稿对应位置：「{finding.quote}」。")
+        lines.append("请对照修改，并补上可核验的依据。")
     elif finding.suggested_new:
         lines.append(f"建议将「{finding.suggested_old}」改为「{finding.suggested_new}」。")
     return "\n".join(line for line in lines if line)
