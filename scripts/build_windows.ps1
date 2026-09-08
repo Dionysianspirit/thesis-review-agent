@@ -16,7 +16,7 @@ Push-Location (Join-Path $Root "agent")
 npm ci --omit=dev
 Pop-Location
 
-# ASCII folder/exe names avoid PowerShell encoding issues. The window title stays Chinese.
+# PyInstaller gets an ASCII name; Python then renames the folder/exe to 论文审改助手.
 $DistName = "ThesisReviewAgent"
 $Entry = Join-Path $Root "python\thesis_review\gui\app.py"
 $GuiData = "python\thesis_review\gui;thesis_review\gui"
@@ -71,3 +71,4 @@ if (-not $Findings) {
 }
 Write-Output "Built $Exe"
 Write-Output "Demo findings: $($Findings.FullName)"
+& $Python (Join-Path $Root "scripts\rename_dist.py")

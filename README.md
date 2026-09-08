@@ -18,12 +18,12 @@
 
 目标机器：Windows 10/11，已安装 Microsoft Word。不要求安装 Python 或 Node。
 
-1. 运行 `scripts/build_windows.ps1`，得到 `dist/ThesisReviewAgent/`。
-2. 把整个文件夹拷给老师，双击 `ThesisReviewAgent.exe`（窗口标题为「论文审改助手」）。
+1. 运行 `scripts/build_windows.ps1`，得到 `dist/论文审改助手/`。
+2. 把整个文件夹拷给老师，双击 `论文审改助手.exe`。
 3. 填写老师与学生身份，导入带批注的历史稿，勾选要复查的问题，再选新稿审查。
 4. 用 Word 打开审改副本，由老师接受或拒绝修订。
 
-文件夹名用英文是为了避开 Windows 控制台编码问题，不影响窗口里的中文。首次启动可能被 SmartScreen 拦截，选择仍要运行。密钥保存在 `%APPDATA%\ThesisReviewAgent\`，不打进 EXE。没有密钥也可以审查。可用「载入演示稿」走一遍模拟学生小周的例子。
+打包时内部先用英文名，再改成中文目录，避免 Windows 控制台把「论文审改助手」弄成乱码。首次启动可能被 SmartScreen 拦截，选择仍要运行。密钥保存在 `%APPDATA%\ThesisReviewAgent\`，不打进 EXE。没有密钥也可以审查。可用「载入演示稿」走一遍模拟学生小周的例子。
 
 若 Word 里已经打开同一文件，请先关闭再导出，否则可能无法覆盖。
 
