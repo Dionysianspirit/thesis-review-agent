@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 
+from thesis_review.school.dalian_finance_2026 import check_school_rules
 from thesis_review.types import Evidence, Finding, ParagraphView, TableView
 
 CAPTION_RE = re.compile(r"^表\s*\d+")
@@ -25,7 +26,7 @@ def check_format(
                     source="rule",
                     code="missing_table_caption",
                     problem="表格缺少「表 n」题注。",
-                    rationale="学校格式通常要求表题位于表上方，形如「表 1 …」。",
+                    rationale="《大连财经学院本科毕业论文（设计）格式标准》3.4：表号居左，格式为「表 1」，位于表体上方。",
                     quote=table.previous_text or table.anchor,
                     anchor=table.previous_anchor or table.anchor,
                     paragraph_index=table.ordinal,
@@ -35,6 +36,7 @@ def check_format(
                 )
             )
     findings.extend(_reference_gaps(paragraphs, draft_id=draft_id))
+    findings.extend(check_school_rules(paragraphs, draft_id=draft_id))
     return findings
 
 
@@ -66,7 +68,7 @@ def _reference_gaps(paragraphs: list[ParagraphView], *, draft_id: str) -> list[F
             source="rule",
             code="reference_number_gap",
             problem="参考文献编号不连续。",
-            rationale=f"当前编号为 {values}，期望从 1 连续到 {max(values)}。",
+            rationale=f"《格式标准》3.3.9 要求正文按 [1]、[2] 顺序编码。当前编号为 {values}。",
             quote=last.text,
             anchor=last.anchor,
             paragraph_index=last.ordinal,
