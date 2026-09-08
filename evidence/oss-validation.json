@@ -1,0 +1,73 @@
+{
+  "checked_on": "2026-09-08",
+  "docxengine_commit": "c4ca7ce5f540ef2e638fbf79cc5f7074702b2967",
+  "upstream_selected_tests": {
+    "total": 135,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 5,
+    "passed": 130
+  },
+  "skipped_tests": [
+    {
+      "name": "test_revision_accept_author",
+      "reason": "conformance corpus not present"
+    },
+    {
+      "name": "test_revision_reject_all",
+      "reason": "conformance corpus not present"
+    },
+    {
+      "name": "test_replace_split_run",
+      "reason": "conformance corpus not present"
+    },
+    {
+      "name": "test_replace_tracked",
+      "reason": "conformance corpus not present"
+    },
+    {
+      "name": "test_edit_paragraph_diff",
+      "reason": "conformance corpus not present"
+    }
+  ],
+  "chinese_probe": {
+    "probe": "Chinese DOCX integration, in memory, no model calls",
+    "checks_passed": [
+      "read existing teacher comments",
+      "Chinese cross-run tracked replacement",
+      "retain teacher revisions",
+      "append separate assistant comment",
+      "retain header bytes and table XML",
+      "isolated staging retains committed bytes on failure",
+      "independent python-docx parse",
+      "reject assistant revisions while retaining teacher revisions"
+    ],
+    "upstream_defect": {
+      "case": "adding a comment with a stale anchor raises anchor_stale but mutates comments.xml",
+      "changed_parts": [
+        "word/comments.xml"
+      ],
+      "before_size": 38447,
+      "after_size": 38493
+    },
+    "candidate_status": "not approved for direct production integration; staging mitigation tested, raw defect remains",
+    "engine_validation": {
+      "valid": true,
+      "issues": [
+        {
+          "severity": "warning",
+          "part": "word/_rels/document.xml.rels",
+          "message": "Relationship rId4 (stylesWithEffects) is never referenced.",
+          "fix_hint": "Harmless; remove the unused relationship to tidy the package."
+        }
+      ]
+    },
+    "not_tested": [
+      "Microsoft Word opening and rendering",
+      "real thesis layout",
+      "semantic review quality",
+      "historical issue matching",
+      "Pi integration"
+    ]
+  }
+}
