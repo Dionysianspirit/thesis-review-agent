@@ -10,7 +10,9 @@ from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.cli import build_service
 from thesis_review.errors import ReviewError
-from thesis_review.service import ASSISTANT_AUTHOR, _comment_body, _history_finding
+from thesis_review.llm import model_available
+from thesis_review.service import ASSISTANT_AUTHOR, _comment_body
+from thesis_review.settings import load_settings
 from thesis_review.types import Finding
 from thesis_review.word.adapter import OpenedDocument, WordAdapter
 
@@ -66,25 +68,28 @@ class Worker:
 
     def op_search_history(self, params: dict) -> dict:
         self._require_open()
-        hits = self.service.search_history(
+        settings = load_settings(self.home)
+        extra = self.service.history_findings(
             teacher_id=self.teacher_id,
             student_id=self.student_id,
             data=self.original,
+            draft_id=str(params.get("draft_id") or "new"),
+            settings=settings,
+            confirm_with_model=model_available(settings),
         )
-        extra = []
-        for hit in hits:
-            issue = self.service.store.get(hit.issue_id)
-            extra.append(_history_finding(hit, issue, str(params.get("draft_id") or "new")))
         self._apply(extra)
         self.findings.extend(extra)
         return {
             "hits": [
                 {
-                    "issue_id": hit.issue_id,
-                    "quote": hit.new_quote,
-                    "evidence": hit.evidence_text,
+                    "issue_id": item.issue_id,
+                    "quote": item.quote,
+                    "evidence": next(
+                        (row.text for row in item.evidence if row.kind == "history"),
+                        item.rationale,
+                    ),
                 }
-                for hit in hits
+                for item in extra
             ]
         }
 

@@ -169,7 +169,7 @@ button.secondary:hover, button.ghost:hover { background: #f5f0e8; }
 }
 
 .issue strong { display: block; }
-.issue span { color: var(--muted); font-size: 13px; }
+.issue span { display: block; color: var(--muted); font-size: 13px; }
 
 .log-card {
   padding: 16px 18px;

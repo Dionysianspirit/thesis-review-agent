@@ -38,11 +38,16 @@ function renderIssues(issues) {
     const label = document.createElement("label");
     label.className = "issue";
     const checked = item.status === "confirmed" ? "checked" : "";
+    const title = item.problem || item.original_text;
+    const kind = item.issue_type || item.category || "";
+    const scope = item.scope ? ` · ${item.scope}` : "";
+    const intent = item.teacher_intent || item.original_text;
     label.innerHTML = `
       <input type="checkbox" data-id="${item.id}" ${checked}>
       <div>
-        <strong>${item.original_text}</strong>
-        <span>原文：「${item.original_span || "无定位"}」 · ${item.status}</span>
+        <strong>${title}</strong>
+        <span>${kind}${scope} · 原文：「${item.original_span || "无定位"}」 · ${item.status}</span>
+        <span>${intent}</span>
       </div>`;
     box.appendChild(label);
   }

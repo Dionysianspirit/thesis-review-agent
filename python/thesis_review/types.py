@@ -60,6 +60,10 @@ class IssueRecord:
     original_context: str
     original_anchor: str
     suggested_fix: str = ""
+    issue_type: str = ""
+    problem: str = ""
+    scope: str = ""
+    teacher_intent: str = ""
     created_at: str = ""
     confirmed_at: str = ""
 

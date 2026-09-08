@@ -7,6 +7,7 @@ from pathlib import Path
 from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.errors import ReviewError
+from thesis_review.history import confirm as history_confirm
 from thesis_review.history.ingest import issues_from_comments, issues_from_revisions, persist
 from thesis_review.history.match import match_issue
 from thesis_review.history.store import HistoryStore
@@ -92,6 +93,28 @@ class ThesisReviewService:
                 hits.append(hit)
         return hits
 
+    def history_findings(
+        self,
+        *,
+        teacher_id: str,
+        student_id: str,
+        data: bytes,
+        draft_id: str,
+        settings: AppSettings | None = None,
+        confirm_with_model: bool = False,
+    ) -> list[Finding]:
+        hits = self.search_history(
+            teacher_id=teacher_id, student_id=student_id, data=data
+        )
+        current = settings or load_settings(self.home)
+        if confirm_with_model and model_available(current):
+            hits = [
+                hit
+                for hit in hits
+                if _keep_history_hit(hit, self.store.get(hit.issue_id), current)
+            ]
+        return [_history_finding(hit, self.store.get(hit.issue_id), draft_id) for hit in hits]
+
     def review(
         self,
         *,
@@ -127,9 +150,16 @@ class ThesisReviewService:
         findings: list[Finding] = []
         findings.extend(check_language(paragraphs, draft_id=draft_id))
         findings.extend(check_format(paragraphs, tables, draft_id=draft_id))
-        for hit in self.search_history(teacher_id=teacher_id, student_id=student_id, data=data):
-            issue = self.store.get(hit.issue_id)
-            findings.append(_history_finding(hit, issue, draft_id))
+        findings.extend(
+            self.history_findings(
+                teacher_id=teacher_id,
+                student_id=student_id,
+                data=data,
+                draft_id=draft_id,
+                settings=current,
+                confirm_with_model=use_model and model_available(current),
+            )
+        )
         used_model = False
         if use_model and not use_pi:
             if model_available(current):
@@ -228,6 +258,23 @@ class ThesisReviewService:
             used_model=not faux,
             warning="",
         )
+
+
+def _keep_history_hit(hit: HistoryHit, issue: IssueRecord, settings: AppSettings) -> bool:
+    confirmation = history_confirm.confirm_history_hit(
+        settings=settings, issue=issue, hit=hit
+    )
+    if confirmation is None:
+        return True
+    return history_confirm.keep_confirmed_hit(
+        {
+            "same_issue": confirmation.same_issue,
+            "confidence": confirmation.confidence,
+            "quote": confirmation.quote,
+            "rationale": confirmation.rationale,
+        },
+        hit.new_quote,
+    )
 
 
 def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Finding:

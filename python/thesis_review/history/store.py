@@ -10,7 +10,14 @@ from thesis_review.types import IssueRecord
 _COLUMNS = (
     "id, teacher_id, student_id, major, source_draft_id, category, status, "
     "original_kind, original_text, original_span, original_context, original_anchor, "
-    "suggested_fix, created_at, confirmed_at"
+    "suggested_fix, issue_type, problem, scope, teacher_intent, created_at, confirmed_at"
+)
+_PLACEHOLDERS = ",".join("?" * 19)
+_NEW_COLUMNS = (
+    ("issue_type", "TEXT NOT NULL DEFAULT ''"),
+    ("problem", "TEXT NOT NULL DEFAULT ''"),
+    ("scope", "TEXT NOT NULL DEFAULT ''"),
+    ("teacher_intent", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -19,6 +26,7 @@ class HistoryStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path)
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS issues (
@@ -35,12 +43,17 @@ class HistoryStore:
                 original_context TEXT NOT NULL DEFAULT '',
                 original_anchor TEXT NOT NULL DEFAULT '',
                 suggested_fix TEXT NOT NULL DEFAULT '',
+                issue_type TEXT NOT NULL DEFAULT '',
+                problem TEXT NOT NULL DEFAULT '',
+                scope TEXT NOT NULL DEFAULT '',
+                teacher_intent TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 confirmed_at TEXT NOT NULL DEFAULT '',
                 UNIQUE(teacher_id, student_id, source_draft_id, original_anchor, original_text)
             )
             """
         )
+        self._migrate()
         self._conn.commit()
 
     def add(self, record: IssueRecord) -> IssueRecord:
@@ -60,9 +73,9 @@ class HistoryStore:
             ),
         ).fetchone()
         if existing:
-            return self.get(existing[0])
+            return self.get(existing["id"])
         conn.execute(
-            f"INSERT INTO issues ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO issues ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
             (
                 record.id,
                 record.teacher_id,
@@ -77,6 +90,10 @@ class HistoryStore:
                 record.original_context,
                 record.original_anchor,
                 record.suggested_fix,
+                record.issue_type,
+                record.problem,
+                record.scope,
+                record.teacher_intent,
                 record.created_at,
                 record.confirmed_at,
             ),
@@ -136,7 +153,13 @@ class HistoryStore:
             "SELECT DISTINCT student_id FROM issues WHERE teacher_id=? ORDER BY student_id",
             (teacher_id,),
         ).fetchall()
-        return [row[0] for row in rows]
+        return [row["student_id"] for row in rows]
+
+    def _migrate(self) -> None:
+        existing = {row[1] for row in self._conn.execute("PRAGMA table_info(issues)")}
+        for name, spec in _NEW_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE issues ADD COLUMN {name} {spec}")
 
     def _connect(self) -> sqlite3.Connection:
         return self._conn
@@ -150,21 +173,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _row_to_record(row: tuple) -> IssueRecord:
+def _row_to_record(row: sqlite3.Row) -> IssueRecord:
     return IssueRecord(
-        id=row[0],
-        teacher_id=row[1],
-        student_id=row[2],
-        major=row[3],
-        source_draft_id=row[4],
-        category=row[5],
-        status=row[6],
-        original_kind=row[7],
-        original_text=row[8],
-        original_span=row[9],
-        original_context=row[10],
-        original_anchor=row[11],
-        suggested_fix=row[12],
-        created_at=row[13],
-        confirmed_at=row[14],
+        id=row["id"],
+        teacher_id=row["teacher_id"],
+        student_id=row["student_id"],
+        major=row["major"],
+        source_draft_id=row["source_draft_id"],
+        category=row["category"],
+        status=row["status"],
+        original_kind=row["original_kind"],
+        original_text=row["original_text"],
+        original_span=row["original_span"],
+        original_context=row["original_context"],
+        original_anchor=row["original_anchor"],
+        suggested_fix=_cell(row, "suggested_fix"),
+        issue_type=_cell(row, "issue_type"),
+        problem=_cell(row, "problem"),
+        scope=_cell(row, "scope"),
+        teacher_intent=_cell(row, "teacher_intent"),
+        created_at=row["created_at"],
+        confirmed_at=_cell(row, "confirmed_at"),
     )
+
+
+def _cell(row: sqlite3.Row, name: str, default: str = "") -> str:
+    if name not in row.keys():
+        return default
+    value = row[name]
+    return default if value is None else str(value)
