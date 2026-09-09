@@ -50,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     demo = sub.add_parser("demo", help="用内置模拟稿跑通离线审查")
     demo.add_argument("--out", type=Path, required=True)
 
+    evaluate = sub.add_parser("eval", help="用本机密钥跑真实模型金标（不进 CI）")
+    evaluate.add_argument("--out", type=Path, required=True)
+    evaluate.add_argument("--manifest", type=Path, default=None, help="可选：本机授权真稿清单，不提交")
+
     args = parser.parse_args(argv)
     home = args.home or app_home()
     service = build_service(home)
@@ -107,6 +111,14 @@ def main(argv: list[str] | None = None) -> int:
         print(result.reviewed_path)
         print(result.findings_path)
         return 0
+    if args.command == "eval":
+        from thesis_review.evalrun import run_eval_command
+
+        return run_eval_command(
+            settings_home=home,
+            out=args.out,
+            manifest=args.manifest,
+        )
     return 1
 
 

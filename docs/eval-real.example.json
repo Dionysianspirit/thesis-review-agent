@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "name": "example-only",
+      "docx": "new.docx",
+      "history": "v1.docx",
+      "expect_argument": true,
+      "expect_history": false
+    }
+  ]
+}

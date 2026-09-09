@@ -17,6 +17,8 @@ class AppSettings:
     api_key: str = ""
     base_url: str = ""
     output_dir: str = ""
+    last_reviewed_path: str = ""
+    last_output_dir: str = ""
 
 
 def settings_path(home: Path) -> Path:
@@ -38,3 +40,20 @@ def save_settings(home: Path, settings: AppSettings) -> None:
         json.dumps(asdict(settings), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def apply_model(settings: AppSettings, payload: dict) -> AppSettings:
+    settings.provider = str(payload.get("provider") or settings.provider or "openai-compatible")
+    settings.model = str(payload.get("model") or settings.model or "")
+    settings.base_url = str(payload.get("base_url") or "")
+    key = str(payload.get("api_key") or "").strip()
+    if key:
+        settings.api_key = key
+    return settings
+
+
+def public_settings(settings: AppSettings) -> dict:
+    payload = asdict(settings)
+    payload["api_key_set"] = bool(settings.api_key.strip())
+    payload["api_key"] = ""
+    return payload

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,49 @@ def test_worker_lists_paragraphs_from_open_draft(tmp_path: Path):
     assert any("非常非常有效" in item["text"] for item in paragraphs)
 
 
+def test_worker_live_events_exist_before_commit_without_claim_quotes(tmp_path: Path):
+    live = tmp_path / "out" / "live"
+    worker = Worker(
+        home=tmp_path,
+        teacher_id="teacher-a",
+        student_id="zhou",
+        major="人工智能",
+        live=live,
+    )
+    _open(worker, sample_overclaim_draft())
+    worker.dispatch("list_outline", {})
+    heading = _paragraph_containing(worker, "3 实验结果")
+    worker.dispatch("read_section", {"start_ordinal": heading["ordinal"], "limit": 4})
+    worker.dispatch(
+        "record_argument_finding",
+        {
+            "claim_quote": OVERCLAIM_CLAIM_QUOTE,
+            "evidence_quote": OVERCLAIM_EVIDENCE_QUOTE,
+            "problem": "结论过满。",
+            "rationale": "提升幅度与用词不符。",
+            "draft_id": "overclaim",
+        },
+    )
+    events_path = live / "events.jsonl"
+    assert events_path.is_file()
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    ops = [item["op"] for item in events]
+    assert "open_draft" in ops
+    assert "list_outline" in ops
+    assert "read_section" in ops
+    assert "record_argument_finding" in ops
+    assert "commit_review" not in ops
+    dumped = json.dumps(events, ensure_ascii=False)
+    assert OVERCLAIM_CLAIM_QUOTE not in dumped
+    assert OVERCLAIM_EVIDENCE_QUOTE not in dumped
+    assert "api_key" not in dumped
+    read_event = next(item for item in events if item["op"] == "read_section")
+    assert "3 实验结果" in str(read_event.get("heading") or "")
+    snapshot = json.loads((live / "findings.json").read_text(encoding="utf-8"))
+    assert snapshot
+    assert any(item.get("source") == "argument" for item in snapshot)
+
+
 def test_worker_commit_review_writes_findings(tmp_path: Path):
     worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
     worker.dispatch("open_draft", {"bytes_b64": base64.b64encode(sample_new_draft()).decode("ascii")})
@@ -48,6 +92,62 @@ def test_worker_commit_review_writes_findings(tmp_path: Path):
     result = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
     assert Path(result["reviewed_path"]).is_file()
     assert Path(result["findings_path"]).is_file()
+
+
+def test_commit_review_writes_trace_without_quotes_or_body(tmp_path: Path):
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
+    _open(worker, sample_overclaim_draft())
+    worker.dispatch("list_outline", {})
+    heading = _paragraph_containing(worker, "3 实验结果")
+    worker.dispatch("read_section", {"start_ordinal": heading["ordinal"], "limit": 4})
+    worker.dispatch(
+        "record_argument_finding",
+        {
+            "claim_quote": OVERCLAIM_CLAIM_QUOTE,
+            "evidence_quote": OVERCLAIM_EVIDENCE_QUOTE,
+            "problem": "结论过满。",
+            "rationale": "提升幅度与用词不符。",
+            "draft_id": "overclaim",
+        },
+    )
+    result = worker.dispatch(
+        "commit_review",
+        {"draft_id": "overclaim", "output_dir": str(tmp_path / "out")},
+    )
+    trace_path = Path(result["trace_path"])
+    assert trace_path.is_file()
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    ops = [item["op"] for item in payload["ops"]]
+    assert "list_outline" in ops
+    assert "read_section" in ops
+    assert "record_argument_finding" in ops
+    assert "commit_review" in ops
+    dumped = json.dumps(payload, ensure_ascii=False)
+    assert OVERCLAIM_CLAIM_QUOTE not in dumped
+    assert OVERCLAIM_EVIDENCE_QUOTE not in dumped
+    assert "api_key" not in dumped
+    read_entry = next(item for item in payload["ops"] if item["op"] == "read_section")
+    assert read_entry["ok"] is True
+    assert read_entry["params"]["start_ordinal"] == heading["ordinal"]
+    record_entry = next(item for item in payload["ops"] if item["op"] == "record_argument_finding")
+    assert "claim_quote" not in record_entry.get("params", {})
+    assert "evidence_quote" not in record_entry.get("params", {})
+
+
+def test_trace_records_failed_nav_and_open_draft_resets(tmp_path: Path):
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
+    _open(worker, sample_overclaim_draft())
+    for _unused in range(12):
+        worker.dispatch("list_outline", {})
+    with pytest.raises(ReviewError):
+        worker.dispatch("list_outline", {})
+    failed = [item for item in worker.trace if item["op"] == "list_outline" and item["ok"] is False]
+    assert failed
+    assert failed[-1]["code"] == "nav_budget"
+    _open(worker, sample_new_draft())
+    assert worker.trace
+    assert worker.trace[-1]["op"] == "open_draft"
+    assert all(item["op"] == "open_draft" for item in worker.trace)
 
 
 def _seed_confirmed_issue(home: Path, *, data: bytes, needle: str) -> str:

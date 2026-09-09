@@ -2,83 +2,179 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>论文审改助手</title>
+  <title>论文初筛助手</title>
   <link rel="stylesheet" href="ui.css">
 </head>
 <body>
-  <div class="app">
-    <header class="masthead">
-      <div>
-        <p class="eyebrow">本科毕业论文 · Word 审改</p>
-        <h1>论文审改助手</h1>
-        <p class="lede">导入历史意见，确认重复问题，再把批注和修订写进新稿副本。本机已内置 Node 与 pi。老师仍在 Word 里决定是否接受。</p>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <div class="brand">
+        <span class="brand-mark serif">论文初筛助手</span>
+        <span class="brand-latin mono">THESIS&nbsp;PRESCREEN</span>
       </div>
-      <button class="ghost" id="btn-settings" type="button">设置</button>
-    </header>
+      <div class="header-actions">
+        <span class="status-pill" id="status-pill">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">准备就绪</span>
+        </span>
+        <button class="pill-link" id="btn-settings" type="button">模型设置</button>
+      </div>
+    </div>
+  </header>
 
-    <section class="identity">
-      <label>老师
-        <input id="teacher-name" type="text" autocomplete="name">
-      </label>
-      <label>学生
-        <input id="student-id" type="text" placeholder="如 zhou">
-      </label>
-      <label>专业
-        <input id="major" type="text">
-      </label>
-      <button class="secondary" id="btn-save-identity" type="button">保存身份</button>
+  <main class="wrap">
+    <section class="hero">
+      <p class="eyebrow mono">本科毕业论文 · 前置预检 · 本机运行</p>
+      <h1 class="serif">先扫一遍，<br>再细看。</h1>
+      <p class="lede">按学校格式条款、语言规则和已确认的历史问题，先把稿件扫一遍，把批注和修订写进 Word 副本。老师仍在 Word 里决定接受或拒绝；学生也可以在交稿前自己先跑一遍。</p>
+      <p class="hero-note mono">PRESCREEN ONLY — 没有命中，不代表全文没有问题。</p>
     </section>
 
-    <ol class="steps">
-      <li>
-        <h2>1. 导入历史稿</h2>
-        <p>选择带老师批注或修订的 Word 文件。未确认的问题不会被写成「再次犯错」。</p>
-        <div class="row">
-          <button id="btn-ingest" type="button">选择历史稿</button>
-          <button class="secondary" id="btn-demo" type="button">载入演示稿</button>
-        </div>
-      </li>
-      <li>
-        <h2>2. 确认历史问题</h2>
-        <p>勾选后才会在新稿中复查。列表显示规则生成的问题摘要，不是模型归纳。</p>
-        <div id="issues" class="issues empty">还没有历史问题。</div>
-      </li>
-      <li>
-        <h2>3. 审查新稿</h2>
-        <p>软件已内置 Node 与 pi，老师不用再装运行时。无密钥走格式与历史字符串复查；填写密钥后，Pi 判断字符串召回的历史候选是不是同一问题，并多步核对主张是否被实验证据支持。</p>
-        <div class="row">
-          <button id="btn-review" type="button">选择新稿并审查</button>
-          <button class="secondary" id="btn-open-doc" type="button" disabled>用 Word 打开审改稿</button>
-          <button class="secondary" id="btn-open-folder" type="button" disabled>打开结果文件夹</button>
-        </div>
-      </li>
-    </ol>
+    <section class="block" id="sec-input">
+      <div class="section-head">
+        <span class="section-index mono">01 / 稿件与身份</span>
+        <h2 class="serif">把稿件放进来。</h2>
+        <p class="section-aside">身份决定历史问题归属于哪位老师、哪名学生。未确认的历史问题，永远不会写成「再次犯错」。</p>
+      </div>
 
-    <section class="log-card">
-      <h2>进度</h2>
-      <pre id="log">准备就绪。请先保存老师与学生身份。</pre>
+      <div class="card identity">
+        <label>老师
+          <input id="teacher-name" type="text" autocomplete="name" placeholder="如 老师甲">
+        </label>
+        <label>学生
+          <input id="student-id" type="text" placeholder="如 zhou">
+        </label>
+        <label>专业
+          <input id="major" type="text" placeholder="如 人工智能">
+        </label>
+        <button class="btn btn-ghost" id="btn-save-identity" type="button">保存身份</button>
+      </div>
+
+      <div class="steps">
+        <article class="card step">
+          <div class="step-top">
+            <span class="step-no mono">STEP 1</span>
+            <h3 class="serif">导入历史稿</h3>
+          </div>
+          <p>选择带老师批注或修订的 Word 历史稿，可以一次多选。批注和修订会被整理成候选历史问题。</p>
+          <div class="row">
+            <button class="btn btn-dark" id="btn-ingest" type="button">选择历史稿</button>
+            <button class="btn btn-ghost" id="btn-demo" type="button">载入演示稿</button>
+          </div>
+        </article>
+
+        <article class="card step">
+          <div class="step-top">
+            <span class="step-no mono">STEP 2</span>
+            <h3 class="serif">确认历史问题</h3>
+          </div>
+          <p>勾选后才会在新稿中复查。列表显示的是规则整理出的问题摘要，不是模型归纳。</p>
+          <div id="issues" class="issues empty">还没有历史问题。先导入历史稿，或载入演示稿。</div>
+        </article>
+
+        <article class="card step">
+          <div class="step-top">
+            <span class="step-no mono">STEP 3</span>
+            <h3 class="serif">初筛新稿</h3>
+          </div>
+          <p>选择学生的新稿开始初筛。窗口会用中文显示正在做什么，命中会一条条出现。离线时走格式、语言规则和历史字符串复查；配置密钥后，由模型确认复犯并核对关键主张的证据。</p>
+          <div class="row">
+            <button class="btn btn-dark" id="btn-review" type="button">选择新稿并初筛</button>
+          </div>
+        </article>
+      </div>
     </section>
-  </div>
+
+    <section class="block" id="sec-results">
+      <div class="section-head">
+        <span class="section-index mono">02 / 初筛结果</span>
+        <h2 class="serif">命中、依据、写入位置。</h2>
+        <p class="section-aside">只呈现规则结果：命中了什么，没命中什么，依据是什么。哪些问题被跳过、哪些被确认，都摆在明处。</p>
+      </div>
+
+      <div id="results-empty" class="card placeholder">
+        还没有初筛结果。完成一次新稿初筛后，这里会按来源分组列出每条命中与依据。
+      </div>
+
+      <div id="results" hidden>
+        <div class="summary card">
+          <div class="summary-counts">
+            <div class="count"><strong class="serif" id="count-all">0</strong><span class="mono">命中总数</span></div>
+            <div class="count"><strong class="serif" id="count-language">0</strong><span class="mono">语言规则</span></div>
+            <div class="count"><strong class="serif" id="count-format">0</strong><span class="mono">格式规则</span></div>
+            <div class="count"><strong class="serif" id="count-history">0</strong><span class="mono">历史复犯</span></div>
+            <div class="count"><strong class="serif" id="count-argument">0</strong><span class="mono">论证取证</span></div>
+            <div class="count muted"><strong class="serif" id="count-skipped">0</strong><span class="mono">未写入</span></div>
+          </div>
+          <div class="summary-side">
+            <span class="mode-badge mono" id="mode-badge">离线规则</span>
+            <span class="recall-line mono" id="recall-line"></span>
+          </div>
+        </div>
+
+        <div id="warning-banner" class="warning" hidden></div>
+
+        <div class="tabs mono" id="tabs">
+          <button class="tab active" data-tab="all" type="button">全部</button>
+          <button class="tab" data-tab="language" type="button">语言规则</button>
+          <button class="tab" data-tab="format" type="button">格式规则</button>
+          <button class="tab" data-tab="history" type="button">历史复犯</button>
+          <button class="tab" data-tab="argument" type="button">论证取证</button>
+          <button class="tab" data-tab="skipped" type="button">未写入</button>
+        </div>
+
+        <div id="findings" class="findings"></div>
+
+        <p class="honesty">本次初筛只覆盖已确认的规则与历史问题。没有命中，不代表全文没有问题；所有批注与修订仍需老师在 Word 中逐条确认。</p>
+      </div>
+    </section>
+
+    <section class="block" id="sec-export">
+      <div class="section-head">
+        <span class="section-index mono">03 / 导出</span>
+        <h2 class="serif">在 Word 里收尾。</h2>
+        <p class="section-aside">审改副本带批注与修订，老师在 Word 中逐条接受或拒绝。findings.json 留存本次初筛的结构化结果。</p>
+      </div>
+      <div class="card export">
+        <div class="row">
+          <button class="btn btn-dark" id="btn-open-doc" type="button" disabled>用 Word 打开审改稿</button>
+          <button class="btn btn-ghost" id="btn-open-folder" type="button" disabled>打开结果文件夹</button>
+        </div>
+        <p class="path-line mono" id="reviewed-path"></p>
+      </div>
+    </section>
+
+    <section class="block log-block">
+      <div class="section-head">
+        <span class="section-index mono">LOG / 进度</span>
+      </div>
+      <pre id="log" class="log mono">准备就绪。请先保存老师与学生身份。</pre>
+      <details class="tech-log" id="tech-log">
+        <summary>技术日志</summary>
+        <pre id="tech-log-body" class="log mono">暂无。</pre>
+      </details>
+    </section>
+  </main>
 
   <div id="settings-modal" class="modal hidden" role="dialog" aria-labelledby="settings-title">
     <div class="modal-card">
-      <h2 id="settings-title">模型设置（可选）</h2>
-      <p>密钥只存在本机，不会打进软件包。默认走 OpenAI 兼容接口；国内中转填写 Base URL。留空则始终离线审查。</p>
+      <h2 id="settings-title" class="serif">模型设置（可选）</h2>
+      <p class="modal-note">密钥只存在本机，不会打进软件包。默认走 OpenAI 兼容接口；国内中转填写 Base URL。已保存的密钥重启后仍有效；输入框留空再保存，不会把旧密钥清掉。要更换时再贴新密钥。</p>
       <label>提供方
         <input id="provider" type="text" placeholder="openai-compatible">
       </label>
       <label>模型名
-        <input id="model" type="text">
+        <input id="model" type="text" placeholder="gpt-4o-mini">
       </label>
       <label>API Base URL
         <input id="base-url" type="text" placeholder="https://api.openai.com/v1">
       </label>
-      <label>API Key
-        <input id="api-key" type="password">
-      </label>
+          <label>API Key
+            <input id="api-key" type="password" placeholder="未保存，离线初筛" autocomplete="off">
+          </label>
       <div class="row">
-        <button id="btn-save-settings" type="button">保存</button>
-        <button class="ghost" id="btn-close-settings" type="button">关闭</button>
+        <button class="btn btn-dark" id="btn-save-settings" type="button">保存</button>
+        <button class="btn btn-ghost" id="btn-close-settings" type="button">关闭</button>
       </div>
     </div>
   </div>

@@ -56,6 +56,39 @@ def python_path() -> str:
     return str(repo_root() / "python")
 
 
+def _default_worker_args(payload: dict) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [
+            "worker",
+            "--home",
+            payload["home"],
+            "--teacher",
+            payload["teacher_id"],
+            "--student",
+            payload["student_id"],
+            "--major",
+            payload.get("major") or "人工智能",
+        ]
+    return [
+        "-m",
+        "thesis_review.worker",
+        "--home",
+        payload["home"],
+        "--teacher",
+        payload["teacher_id"],
+        "--student",
+        payload["student_id"],
+        "--major",
+        payload.get("major") or "人工智能",
+    ]
+
+
+def _with_live_arg(args: list[str], output_dir: str) -> list[str]:
+    if "--live" in args:
+        return list(args)
+    return list(args) + ["--live", str(Path(output_dir) / "live")]
+
+
 def run_agent_selftest() -> subprocess.CompletedProcess[str]:
     node = resolve_node()
     script = agent_entry()
@@ -72,6 +105,12 @@ def run_agent_selftest() -> subprocess.CompletedProcess[str]:
     )
 
 
+def redact_pi_request(request: dict) -> dict:
+    payload = dict(request)
+    payload.pop("api_key", None)
+    return payload
+
+
 def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> dict:
     node = resolve_node()
     script = agent_entry()
@@ -79,34 +118,14 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
     payload.setdefault("python", sys.executable)
     payload.setdefault("pythonpath", python_path())
     if "worker_args" not in payload:
-        if getattr(sys, "frozen", False):
-            payload["worker_args"] = [
-                "worker",
-                "--home",
-                payload["home"],
-                "--teacher",
-                payload["teacher_id"],
-                "--student",
-                payload["student_id"],
-                "--major",
-                payload.get("major") or "人工智能",
-            ]
-        else:
-            payload["worker_args"] = [
-                "-m",
-                "thesis_review.worker",
-                "--home",
-                payload["home"],
-                "--teacher",
-                payload["teacher_id"],
-                "--student",
-                payload["student_id"],
-                "--major",
-                payload.get("major") or "人工智能",
-            ]
+        payload["worker_args"] = _default_worker_args(payload)
+    payload["worker_args"] = _with_live_arg(payload["worker_args"], payload["output_dir"])
     request_path = Path(payload["output_dir"]) / "pi-request.json"
     request_path.parent.mkdir(parents=True, exist_ok=True)
-    request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    request_path.write_text(
+        json.dumps(redact_pi_request(payload), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     command = [str(node), str(script), "--request", str(request_path)]
     if faux:
         command.append("--faux")

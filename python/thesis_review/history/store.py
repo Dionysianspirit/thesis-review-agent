@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,89 +26,93 @@ class HistoryStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS issues (
-                id TEXT PRIMARY KEY,
-                teacher_id TEXT NOT NULL,
-                student_id TEXT NOT NULL,
-                major TEXT NOT NULL DEFAULT '',
-                source_draft_id TEXT NOT NULL,
-                category TEXT NOT NULL,
-                status TEXT NOT NULL,
-                original_kind TEXT NOT NULL,
-                original_text TEXT NOT NULL,
-                original_span TEXT NOT NULL DEFAULT '',
-                original_context TEXT NOT NULL DEFAULT '',
-                original_anchor TEXT NOT NULL DEFAULT '',
-                suggested_fix TEXT NOT NULL DEFAULT '',
-                issue_type TEXT NOT NULL DEFAULT '',
-                problem TEXT NOT NULL DEFAULT '',
-                scope TEXT NOT NULL DEFAULT '',
-                teacher_intent TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                confirmed_at TEXT NOT NULL DEFAULT '',
-                UNIQUE(teacher_id, student_id, source_draft_id, original_anchor, original_text)
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS issues (
+                    id TEXT PRIMARY KEY,
+                    teacher_id TEXT NOT NULL,
+                    student_id TEXT NOT NULL,
+                    major TEXT NOT NULL DEFAULT '',
+                    source_draft_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    original_kind TEXT NOT NULL,
+                    original_text TEXT NOT NULL,
+                    original_span TEXT NOT NULL DEFAULT '',
+                    original_context TEXT NOT NULL DEFAULT '',
+                    original_anchor TEXT NOT NULL DEFAULT '',
+                    suggested_fix TEXT NOT NULL DEFAULT '',
+                    issue_type TEXT NOT NULL DEFAULT '',
+                    problem TEXT NOT NULL DEFAULT '',
+                    scope TEXT NOT NULL DEFAULT '',
+                    teacher_intent TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    confirmed_at TEXT NOT NULL DEFAULT '',
+                    UNIQUE(teacher_id, student_id, source_draft_id, original_anchor, original_text)
+                )
+                """
             )
-            """
-        )
-        self._migrate()
-        self._conn.commit()
+            self._migrate()
+            self._conn.commit()
 
     def add(self, record: IssueRecord) -> IssueRecord:
-        conn = self._connect()
-        existing = conn.execute(
-            """
-            SELECT id FROM issues
-            WHERE teacher_id=? AND student_id=? AND source_draft_id=?
-              AND original_anchor=? AND original_text=?
-            """,
-            (
-                record.teacher_id,
-                record.student_id,
-                record.source_draft_id,
-                record.original_anchor,
-                record.original_text,
-            ),
-        ).fetchone()
-        if existing:
-            return self.get(existing["id"])
-        conn.execute(
-            f"INSERT INTO issues ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
-            (
-                record.id,
-                record.teacher_id,
-                record.student_id,
-                record.major,
-                record.source_draft_id,
-                record.category,
-                record.status,
-                record.original_kind,
-                record.original_text,
-                record.original_span,
-                record.original_context,
-                record.original_anchor,
-                record.suggested_fix,
-                record.issue_type,
-                record.problem,
-                record.scope,
-                record.teacher_intent,
-                record.created_at,
-                record.confirmed_at,
-            ),
-        )
-        conn.commit()
-        return record
+        with self._lock:
+            conn = self._connect()
+            existing = conn.execute(
+                """
+                SELECT id FROM issues
+                WHERE teacher_id=? AND student_id=? AND source_draft_id=?
+                  AND original_anchor=? AND original_text=?
+                """,
+                (
+                    record.teacher_id,
+                    record.student_id,
+                    record.source_draft_id,
+                    record.original_anchor,
+                    record.original_text,
+                ),
+            ).fetchone()
+            if existing:
+                return self.get(existing["id"])
+            conn.execute(
+                f"INSERT INTO issues ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
+                (
+                    record.id,
+                    record.teacher_id,
+                    record.student_id,
+                    record.major,
+                    record.source_draft_id,
+                    record.category,
+                    record.status,
+                    record.original_kind,
+                    record.original_text,
+                    record.original_span,
+                    record.original_context,
+                    record.original_anchor,
+                    record.suggested_fix,
+                    record.issue_type,
+                    record.problem,
+                    record.scope,
+                    record.teacher_intent,
+                    record.created_at,
+                    record.confirmed_at,
+                ),
+            )
+            conn.commit()
+            return record
 
     def get(self, issue_id: str) -> IssueRecord:
-        row = self._connect().execute(
-            f"SELECT {_COLUMNS} FROM issues WHERE id=?", (issue_id,)
-        ).fetchone()
-        if row is None:
-            raise KeyError(issue_id)
-        return _row_to_record(row)
+        with self._lock:
+            row = self._connect().execute(
+                f"SELECT {_COLUMNS} FROM issues WHERE id=?", (issue_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(issue_id)
+            return _row_to_record(row)
 
     def list_issues(
         self,
@@ -122,7 +127,8 @@ class HistoryStore:
             sql += " AND status=?"
             params.append(status)
         sql += " ORDER BY created_at"
-        rows = self._connect().execute(sql, params).fetchall()
+        with self._lock:
+            rows = self._connect().execute(sql, params).fetchall()
         return [_row_to_record(row) for row in rows]
 
     def set_status(
@@ -133,26 +139,28 @@ class HistoryStore:
         issue_id: str,
         status: str,
     ) -> IssueRecord:
-        conn = self._connect()
-        row = conn.execute(
-            f"SELECT {_COLUMNS} FROM issues WHERE id=? AND teacher_id=? AND student_id=?",
-            (issue_id, teacher_id, student_id),
-        ).fetchone()
-        if row is None:
-            raise KeyError(issue_id)
-        confirmed_at = _now() if status == "confirmed" else ""
-        conn.execute(
-            "UPDATE issues SET status=?, confirmed_at=? WHERE id=?",
-            (status, confirmed_at, issue_id),
-        )
-        conn.commit()
-        return self.get(issue_id)
+        with self._lock:
+            conn = self._connect()
+            row = conn.execute(
+                f"SELECT {_COLUMNS} FROM issues WHERE id=? AND teacher_id=? AND student_id=?",
+                (issue_id, teacher_id, student_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(issue_id)
+            confirmed_at = _now() if status == "confirmed" else ""
+            conn.execute(
+                "UPDATE issues SET status=?, confirmed_at=? WHERE id=?",
+                (status, confirmed_at, issue_id),
+            )
+            conn.commit()
+            return self.get(issue_id)
 
     def list_students(self, teacher_id: str) -> list[str]:
-        rows = self._connect().execute(
-            "SELECT DISTINCT student_id FROM issues WHERE teacher_id=? ORDER BY student_id",
-            (teacher_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._connect().execute(
+                "SELECT DISTINCT student_id FROM issues WHERE teacher_id=? ORDER BY student_id",
+                (teacher_id,),
+            ).fetchall()
         return [row["student_id"] for row in rows]
 
     def _migrate(self) -> None:

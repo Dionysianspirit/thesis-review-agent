@@ -10,6 +10,7 @@ from thesis_review.errors import ReviewError
 from thesis_review.history.ingest import issues_from_comments, issues_from_revisions, persist
 from thesis_review.history.match import match_issue
 from thesis_review.history.store import HistoryStore
+from thesis_review.live import append_event, live_dir, reset_live, write_findings
 from thesis_review.llm import model_available
 from thesis_review.settings import AppSettings, load_settings
 from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ReviewResult
@@ -118,11 +119,15 @@ class ThesisReviewService:
         use_pi: bool = False,
         faux: bool = False,
         faux_scenario: str = "",
+        pi_timeout: int = 180,
+        offline_fallback: bool = True,
     ) -> ReviewResult:
         current = settings or load_settings(self.home)
         warning = ""
         semantic = use_model and model_available(current)
         should_pi = faux or use_pi or semantic
+        live = live_dir(output_dir)
+        reset_live(live)
         if should_pi:
             try:
                 return self._review_with_pi(
@@ -134,17 +139,23 @@ class ThesisReviewService:
                     settings=current,
                     faux=faux,
                     faux_scenario=faux_scenario,
+                    timeout=pi_timeout,
                 )
             except Exception as exc:  # noqa: BLE001 - fall back to offline rules
+                if not offline_fallback:
+                    raise
                 warning = f"模型审查未能完成，已改用离线规则。{exc}"
                 if semantic:
                     warning += " 历史问题未经确认，未写成复犯。"
+        append_event(live, {"op": "open_draft", "ok": True})
         opened = self.adapter.open_bytes(data)
         paragraphs = self.adapter.list_paragraphs(opened)
         tables = self.adapter.list_tables(opened)
         findings: list[Finding] = []
         findings.extend(check_language(paragraphs, draft_id=draft_id))
         findings.extend(check_format(paragraphs, tables, draft_id=draft_id))
+        append_event(live, {"op": "run_checks", "ok": True})
+        write_findings(live, findings)
         if not (semantic and warning):
             findings.extend(
                 self.history_findings(
@@ -154,6 +165,8 @@ class ThesisReviewService:
                     draft_id=draft_id,
                 )
             )
+            append_event(live, {"op": "get_history_candidates", "ok": True})
+            write_findings(live, findings)
         used_model = False
         if use_model and not warning and not model_available(current):
             warning = "未配置模型密钥，已改用离线规则。"
@@ -190,6 +203,9 @@ class ThesisReviewService:
             json.dumps([item.to_dict() for item in findings], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        append_event(live, {"op": "commit_review", "ok": True})
+        write_findings(live, findings)
+        append_event(live, {"op": "done", "ok": True})
         return ReviewResult(
             reviewed_path=reviewed_path,
             findings_path=findings_path,
@@ -209,6 +225,7 @@ class ThesisReviewService:
         settings: AppSettings,
         faux: bool,
         faux_scenario: str = "",
+        timeout: int = 180,
     ) -> ReviewResult:
         from thesis_review.runtime import python_path, run_pi_review
 
@@ -233,6 +250,7 @@ class ThesisReviewService:
                 "faux_scenario": faux_scenario,
             },
             faux=faux,
+            timeout=timeout,
         )
         findings_path = Path(payload["findings_path"])
         raw = json.loads(findings_path.read_text(encoding="utf-8"))

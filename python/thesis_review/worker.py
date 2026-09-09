@@ -10,13 +10,16 @@ from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.cli import build_service
 from thesis_review.errors import ReviewError
+from thesis_review.live import append_event, reset_live, write_findings
 from thesis_review.history.match import HEADING_RE, match_issue, normalize
 from thesis_review.service import ASSISTANT_AUTHOR, _comment_body, _history_finding
 from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ParagraphView
 from thesis_review.word.adapter import OpenedDocument, WordAdapter
 
 NAV_OPS = frozenset({"list_outline", "read_section", "read_paragraphs", "find_text"})
+LIVE_FINDING_OPS = frozenset({"run_checks", "confirm_history_finding", "record_argument_finding"})
 NAV_BUDGET = 12
+TRACE_PARAM_KEYS = frozenset({"start_ordinal", "limit", "max_hits", "draft_id", "issue_id"})
 MAX_READ_PARAS = 8
 MAX_READ_CHARS = 2000
 MAX_ARGUMENT_FINDINGS = 3
@@ -38,11 +41,20 @@ NAMED_HEADINGS = (
 
 
 class Worker:
-    def __init__(self, *, home: Path, teacher_id: str, student_id: str, major: str) -> None:
+    def __init__(
+        self,
+        *,
+        home: Path,
+        teacher_id: str,
+        student_id: str,
+        major: str,
+        live: Path | None = None,
+    ) -> None:
         self.home = Path(home)
         self.teacher_id = teacher_id
         self.student_id = student_id
         self.major = major
+        self.live = Path(live) if live else None
         self.service = build_service(self.home)
         self.adapter = WordAdapter()
         self.opened: OpenedDocument | None = None
@@ -50,16 +62,77 @@ class Worker:
         self.findings: list[Finding] = []
         self.nav_calls = 0
         self.argument_count = 0
+        self.trace: list[dict] = []
 
     def dispatch(self, op: str, params: dict) -> dict:
-        if op in NAV_OPS:
-            if self.nav_calls >= NAV_BUDGET:
-                raise ReviewError("nav_budget", "导航次数已达上限，只能记录论证发现或提交审改。")
-            self.nav_calls += 1
-        handler = getattr(self, f"op_{op}", None)
-        if handler is None:
-            raise ReviewError("unknown_op", f"未知操作：{op}")
-        return handler(params)
+        try:
+            if op in NAV_OPS:
+                if self.nav_calls >= NAV_BUDGET:
+                    raise ReviewError("nav_budget", "导航次数已达上限，只能记录论证发现或提交审改。")
+                self.nav_calls += 1
+            handler = getattr(self, f"op_{op}", None)
+            if handler is None:
+                raise ReviewError("unknown_op", f"未知操作：{op}")
+            result = handler(params)
+            self._record_trace(op, params, ok=True)
+            self._emit_live(op, params, ok=True)
+            if op in LIVE_FINDING_OPS:
+                self._write_live_findings()
+            if op == "commit_review":
+                result = dict(result)
+                result["trace_path"] = self._write_trace(params)
+                self._write_live_findings()
+                self._emit_live("done", {}, ok=True)
+            return result
+        except ReviewError as exc:
+            self._record_trace(op, params, ok=False, code=exc.code)
+            self._emit_live(op, params, ok=False, code=exc.code)
+            raise
+
+    def _record_trace(self, op: str, params: dict, *, ok: bool, code: str = "") -> None:
+        entry: dict = {"op": op, "ok": ok, "params": _safe_trace_params(params)}
+        if not ok:
+            entry["code"] = code
+        self.trace.append(entry)
+
+    def _write_trace(self, params: dict) -> str:
+        output_dir = Path(params["output_dir"])
+        draft_id = str(params.get("draft_id") or "new")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = output_dir / f"{draft_id}-trace.json"
+        trace_path.write_text(
+            json.dumps({"draft_id": draft_id, "ops": self.trace}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return str(trace_path)
+
+    def _emit_live(self, op: str, params: dict, *, ok: bool, code: str = "") -> None:
+        event: dict = {"op": op, "ok": ok}
+        heading = self._live_heading(op, params)
+        if heading:
+            event["heading"] = heading
+        if code:
+            event["code"] = code
+        append_event(self.live, event)
+
+    def _write_live_findings(self) -> None:
+        write_findings(self.live, self.findings)
+
+    def _live_heading(self, op: str, params: dict) -> str:
+        if op != "read_section" or "start_ordinal" not in params:
+            return ""
+        try:
+            ordinal = int(params["start_ordinal"])
+        except (TypeError, ValueError):
+            return ""
+        try:
+            items = self._paragraphs()
+        except ReviewError:
+            return ""
+        for item in items:
+            if item.ordinal == ordinal:
+                return item.text[:OUTLINE_TEXT_LIMIT]
+        return ""
 
     def op_open_draft(self, params: dict) -> dict:
         if params.get("path"):
@@ -73,6 +146,8 @@ class Worker:
         self.findings = []
         self.nav_calls = 0
         self.argument_count = 0
+        self.trace = []
+        reset_live(self.live)
         paragraphs = self.adapter.list_paragraphs(self.opened)
         return {"n_paragraphs": len(paragraphs)}
 
@@ -354,6 +429,13 @@ class Worker:
                     continue
 
 
+def _safe_trace_params(params: dict) -> dict:
+    safe = {key: params[key] for key in TRACE_PARAM_KEYS if key in params}
+    if "needle" in params:
+        safe["needle_len"] = len(str(params.get("needle") or ""))
+    return safe
+
+
 def _paragraph_with_quote(quote: str, paragraphs: list[ParagraphView]) -> ParagraphView | None:
     if not quote:
         return None
@@ -464,8 +546,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--student", required=True)
     parser.add_argument("--major", default="人工智能")
     parser.add_argument("--portfile", type=Path, default=None)
+    parser.add_argument("--live", type=Path, default=None)
     args = parser.parse_args(argv)
-    worker = Worker(home=args.home, teacher_id=args.teacher, student_id=args.student, major=args.major)
+    worker = Worker(
+        home=args.home,
+        teacher_id=args.teacher,
+        student_id=args.student,
+        major=args.major,
+        live=args.live,
+    )
     if args.portfile is not None:
         _serve_tcp(worker, args.portfile)
         return 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tests.helpers import (
@@ -71,6 +72,11 @@ def test_faux_overclaim_records_argument_finding(tmp_path: Path):
     blob = "\n".join(item.text for item in comments)
     assert OVERCLAIM_CLAIM_QUOTE in blob
     assert OVERCLAIM_EVIDENCE_QUOTE in blob
+    trace_path = result.findings_path.with_name("overclaim-trace.json")
+    assert trace_path.is_file()
+    ops = [item["op"] for item in json.loads(trace_path.read_text(encoding="utf-8"))["ops"]]
+    assert "list_outline" in ops
+    assert "record_argument_finding" in ops
 
 
 def test_faux_skips_history_when_heading_unchanged_body_fixed(tmp_path: Path):
