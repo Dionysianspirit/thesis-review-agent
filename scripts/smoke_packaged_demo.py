@@ -91,11 +91,53 @@ def smoke(binary: Path, probe: Path) -> dict:
     return assert_teacher_gate(payload)
 
 
+def smoke_pi_selftest(out_dir: Path) -> None:
+    if os.name == "nt":
+        node = out_dir / "runtime" / "node" / "node.exe"
+    else:
+        node = out_dir / "runtime" / "node" / "bin" / "node"
+    script = out_dir / "agent" / "review.mjs"
+    if not node.is_file() or not script.is_file():
+        raise SystemExit(f"missing bundled pi runtime: {node} {script}")
+    result = subprocess.run(
+        [str(node), str(script), "--selftest"],
+        cwd=str(script.parent),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0 or "pi-ok" not in (result.stdout or ""):
+        raise SystemExit(f"bundled pi selftest failed\n{result.stdout}\n{result.stderr}")
+
+
+def smoke_worker_teacher_gate(binary: Path, home: Path) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [str(binary), "worker", "--home", str(home), "--teacher", "teacher-a", "--student", "zhou"],
+        input=json.dumps({"id": 1, "op": "add_comment", "params": {"text": "no"}}, ensure_ascii=False) + "\n",
+        cwd=str(binary.parent),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"frozen worker failed ({result.returncode})\n{result.stdout}\n{result.stderr}"
+        )
+    line = json.loads((result.stdout or "").strip().splitlines()[-1])
+    if (line.get("error") or {}).get("code") != "teacher_gate":
+        raise SystemExit(f"frozen worker did not enforce teacher gate: {line}")
+
+
 def main() -> int:
     out_dir = build()
     _bundle_runtime(out_dir)
     binary = _binary(out_dir)
+    smoke_pi_selftest(out_dir)
     payload = smoke(binary, ROOT / "artifacts" / "packaged-demo")
+    smoke_worker_teacher_gate(binary, ROOT / "artifacts" / "packaged-demo")
     print(
         json.dumps(
             {
@@ -104,6 +146,8 @@ def main() -> int:
                     k: payload[k]
                     for k in ("ok", "candidates", "comments_before", "comments_after", "n_exported")
                 },
+                "worker_teacher_gate": True,
+                "pi_selftest": True,
             },
             ensure_ascii=False,
         )

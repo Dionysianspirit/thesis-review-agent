@@ -19,6 +19,8 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     assert "pyinstaller_build" in smoke
     assert "teacher-gate.json" in smoke
     assert "comments_before" in smoke
+    assert "smoke_worker_teacher_gate" in smoke
+    assert "smoke_pi_selftest" in smoke
 
 
 def test_packager_teacher_gate_treats_zero_comments_before_as_success():
