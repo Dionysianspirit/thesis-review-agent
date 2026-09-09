@@ -1,332 +1,236 @@
 # 论文审稿助手 · Thesis Review Agent
 
-> 面向教师的本科毕业论文本地审稿工作台：老师选择学生 Word，AI 完成第一轮初审，候选意见经老师确认 / 编辑 / 驳回后，才写入给学生的正式审稿稿。
+> 面向教师的本科毕业论文本地 Word 审稿工作台。AI 负责第一轮发现问题，老师负责最终判断；只有老师确认过的意见，才会进入正式学生稿。
 
-**AI 不是最终裁判。**它替老师承担第一遍格式、语言、内容、历史问题和必要的外部核验；最终决定永远由老师做。
+**当前版本：V0.6 · 教师审稿工作台**
 
-> **当前版本：V0.6 · 教师审稿工作台**  
-> **重要边界：没有命中，不代表全文没有问题。未经老师确认的意见不会出现在正式学生 Word 中。**
+**核心边界：AI 初审只产生候选，不直接改正式稿。** 老师可以逐条确认、编辑后确认或驳回；只有 `accepted` 与 `edited_accepted` 会写入最终 Word。
 
 ---
 
-## ⬇️ 老师：Windows 使用
+## ⬇️ 老师：直接下载 V0.6
 
-老师请从 GitHub Release 的 **[latest（V0.6）](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)** 下载 Windows 包（不要再用旧的 V0.4）。
+**[下载 GitHub Releases 最新版（V0.6）](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)**
 
-适用环境：Windows 10 / 11，已安装 Microsoft Word。解压后运行 `论文审改助手.exe`；首次启动若被 SmartScreen 拦截，选择「仍要运行」。老师不需要另行安装 Python 或 Node。
+当前 Windows Release：`v0.6.0`  
+发布包：`thesis-review-agent-v0.6.0-windows.zip`
 
-开发者如需本机重打包：
+适用环境：
 
-```powershell
-powershell -File scripts/build_windows.ps1
+- Windows 10 / 11
+- 已安装 Microsoft Word
+- 不需要另外安装 Python 或 Node.js
+
+使用方法：
+
+1. 下载并解压 Windows 包。
+2. 双击 `论文审改助手.exe`。
+3. 如果 Windows SmartScreen 拦截，选择「仍要运行」。
+4. 模型密钥可选；密钥只保存在本机 `%APPDATA%\ThesisReviewAgent\`，不会打进安装包，也不会提交到仓库。
+
+如果只是想先看流程，可以在界面中使用演示稿。
+
+---
+
+## 教师工作流
+
+V0.6 的产品逻辑不是“AI 自动批改论文”，而是一个 **teacher-gated review workstation**：
+
+1. **准备**  
+   填写老师 / 学生 / 专业，选择当前学生 Word；历史稿只作为辅助复查材料。
+
+2. **AI 初审**  
+   规则检查和 Agent 第一轮审阅产生候选意见。界面会显示中文进度、当前检查意图和逐步出现的 finding。
+
+3. **老师决定**  
+   每条候选都由老师选择：确认、编辑后确认或驳回。格式类问题可以批量接受，但仍允许单条调整。
+
+4. **生成正式审稿稿件**  
+   只有老师认可的意见进入正式 Word。仍处于 `pending` 或已经 `rejected` 的意见不会写入。
+
+这意味着：**AI 可以帮助老师扩大第一轮覆盖面，但不能绕过老师直接形成正式批注或修订。**
+
+---
+
+## V0.6 能做什么
+
+| 能力 | 不配置模型密钥 | 配置模型密钥 |
+| --- | --- | --- |
+| 学校格式规则 | ✅ 候选 | ✅ 候选 |
+| 基础语言规则 | ✅ 候选 | ✅ 候选 |
+| 历史问题召回 | ✅ 字符串 / 已有召回能力 | ✅ Agent 进一步核对是否真复犯 |
+| 内容审查：论证 / 数据 / 方法 / 实验 / 结构 | ❌ | ✅ 有界第一轮审阅 |
+| 必要时的外部核验 | ❌ | ✅ 受控检索；失败时不编造结论 |
+| 中文实时进度与 finding 递增 | ✅ | ✅ |
+| Review Session 保存与恢复 | ✅ | ✅ |
+| 老师确认门 | ✅ | ✅ |
+| 正式 Word 批注 / 修订输出 | ✅ 仅老师确认项 | ✅ 仅老师确认项 |
+| 模型设置持久化 | ✅ | ✅ |
+
+目前确定性学校格式规则主要依据 **大连财经学院 2026 届相关要求**，详见 [`docs/dalian-finance-2026.md`](docs/dalian-finance-2026.md)。
+
+---
+
+## 为什么必须有“老师确认门”
+
+论文审稿不是适合让模型直接落盘的场景。
+
+V0.6 把 AI 输出和正式 Word 写入拆成两个阶段：
+
+```text
+学生 Word
+   ↓
+规则 + Agent 第一轮审阅
+   ↓
+候选 Findings
+   ↓
+老师确认 / 编辑后确认 / 驳回
+   ↓
+Teacher Gate
+   ↓
+正式学生 Word
 ```
 
-完成后运行 `dist\论文审改助手\论文审改助手.exe`。
+程序层会阻止第一轮 Agent 直接调用正式写入路径。只有进入老师决定阶段并满足状态条件后，批注与修订才允许落盘。
 
-模型密钥是可选的。密钥只保存在本机 `%APPDATA%\ThesisReviewAgent\`，不会打进安装包，也不会提交到仓库。
+因此项目的原则不再是“模型发现什么就写什么”，而是：
 
-### 教师工作流
-
-1. **准备稿件**：填写老师 / 学生 / 专业，选择当前新稿。历史稿只是辅助复查材料。
-2. **开始 AI 初审**：Agent 自主阅读论文结构，候选意见边发现边出现。
-3. **处理候选意见**：确认、编辑后确认或驳回；格式问题可批量接受，仍可单条驳回。
-4. **生成正式审稿稿件**：只有已确认和编辑后确认的意见进入学生 Word。
-
-如果只是想先看看效果，可以直接点击界面里的 **「载入演示稿」**。
+> **AI 负责发现和取证，老师负责裁决，程序负责执行边界。**
 
 ---
 
-## 它现在能做什么？
+## 历史问题不是自动判“复犯”
 
-| 能力 | 不配模型密钥 | 配置模型密钥 |
-| --- | --- | --- |
-| 学校格式规则（先入候选，老师决定） | ✅ | ✅ |
-| 基础语言规则（先入候选，老师决定） | ✅ | ✅ |
-| 学生历史字符串召回 + 语义召回 | ✅ 召回 | ✅ Agent 核对是否真复犯 |
-| 内容审查（论证 / 数据 / 方法 / 实验 / 结构） | ❌ | ✅ 有界 Agent 自主阅读 |
-| 必要时的外部核验 | ❌ | ✅ 受控 web_search，失败不编造 |
-| 老师确认门（pending / accepted / rejected / edited_accepted） | ✅ | ✅ |
-| Review Session 持久化与恢复 | ✅ | ✅ |
-| 中文直播 + 检查意图 + finding 递增 | ✅ | ✅ |
-| 密钥重启后仍可用（留空不覆盖） | ✅ | ✅ |
+历史稿和老师过去的批注会进入复查链路，但历史命中首先只是 **recall candidate**。
 
-目前学校格式规则主要按 **大连财经学院 2026 届相关要求**做确定性检查；具体规则见 [`docs/dalian-finance-2026.md`](docs/dalian-finance-2026.md)。
+典型情况：老师曾批注“结论缺少实验依据”。新稿里出现相似内容时：
 
-### 一个最典型的场景
+- 离线能力先召回可能相关的位置；
+- 有模型密钥时，Agent 可以继续阅读上下文并判断是否还是同一类问题；
+- 最终仍进入老师候选列表；
+- 老师确认后，才允许进入正式审稿稿件。
 
-老师在旧稿里批注：
-
-> “不要只说模型效果好，需要给出实验依据。”
-
-新稿中仍出现类似问题时：
-
-- 离线模式先通过历史文本匹配召回候选；
-- 有模型密钥时，Pi 判断它是否还是同一类问题；
-- 只有判断成立、并且引用的 `quote` 确实存在于新稿原文时，Python 才允许把它写成“历史复犯”批注。
-
-如果 Pi 不确定、模型调用失败、或者引用原文对不上，**不会把未确认的字符串命中写成“你又犯了这个问题”**。
+这样可以避免仅因为标题、短句或旧问题关键词再次出现，就自动给学生贴上“又犯了”的结论。
 
 ---
 
-## 为什么叫“初筛助手”，而不是“AI 论文导师”？
-
-这个项目刻意把能力限制在可核验的范围内。
-
-### 会做
-
-- 找明确的格式和语言问题
-- 复查老师已经确认过的历史问题
-- 给出旧稿批注、旧稿原文、本稿对应位置
-- 对少量关键主张做“主张 → 实验 / 数据 → 反证”式取证
-- 把结果写回 Word，保留人工最终决定权
-
-### 暂时不做
-
-- 全文代写
-- 自动评分
-- 创新性判定
-- 查重 / 原创性判断
-- 学生画像
-- 多模型投票裁决
-- 把一次局部批注自动升级成全校规则
-- 声称“没报错 = 论文没问题”
-
----
-
-# 给技术读者
-
-## 一句话架构
-
-**外层是有边界的 workflow，内层是 Pi 驱动的 bounded Agent。**
-
-确定性的事情交给 Python；需要语义判断、导航和多步取证的事情交给 Pi；真正写入 Word 前，再由 Python 做硬校验。
+## V0.6 架构
 
 ```mermaid
 flowchart TD
-    A[教师 GUI] --> B[ThesisReviewService]
-    B --> S[Review Session]
+    A[教师 GUI] --> B[Review Session]
     B --> C[确定性规则\n格式 / 语言]
-    B --> D[历史问题库]
-    D --> E[字符串召回 + 语义召回]
-    B -->|配置模型| F[Pi 第一轮初审 Agent]
-    E --> F
-    F --> G[list_outline / read / find]
-    F --> H[历史核对 / 内容发现 / 按需 web]
-    C --> I[Evidence Gate]
+    B --> D[历史问题库\n召回候选]
+    B -->|配置模型| E[Pi 第一轮审阅 Agent]
+
+    E --> F[论文导航\noutline / read / find]
+    E --> G[内容审查\n历史核对 / 论证 / 数据 / 方法 / 实验]
+    E --> H[必要时外部核验]
+
+    C --> I[Candidate Findings]
+    D --> I
+    G --> I
     H --> I
-    I --> J[候选 Finding]
-    J --> K[老师确认 / 编辑 / 驳回]
-    K --> L[正式学生 Word]
+
+    I --> J[老师决定\naccepted / edited_accepted / rejected]
+    J --> K[Teacher Gate]
+    K --> L[正式 Word\n批注 + 修订]
 ```
 
----
+### Python 负责什么
 
-## Pi 在项目里具体负责什么？
+- DOCX 读取、复制、批注与修订写回
+- 学校格式和基础语言规则
+- 历史问题存储、召回和学生范围隔离
+- Review Session 持久化
+- quote / 原文等程序级校验
+- 工具预算和写入边界
+- Teacher Gate 与正式导出
 
-Pi 不是 Word 处理库，也不是数据库。
+### Pi Agent 负责什么
 
-它在 V0.4 里承担的是 **Agent runtime**：
+- 管理模型调用和 tool calling
+- 根据论文结构决定下一步读哪里
+- 阅读局部章节并形成第一轮候选
+- 核对历史问题是否仍然成立
+- 检查论证、数据、方法、实验和结构问题
+- 必要时进行受控外部核验
+- 证据不足时选择不形成候选
 
-- 管理模型与 tool calling
-- 根据当前观察决定下一步读哪里
-- 在有限工具集合里自主导航
-- 判断历史候选是否真的属于同一问题
-- 为关键主张寻找实验 / 数据证据
-- 主动检查基线、显著性、提升幅度等反证
-- 证据不足时选择“不写 finding”
-
-而 Python 负责：
-
-- DOCX 读取与写回
-- 学校规则
-- 历史问题存储
-- 候选召回
-- quote 是否真实存在
-- 历史问题是否属于当前老师 / 学生
-- 导航次数、读取长度、finding 数量等硬限制
-- 最终批注和修订落盘
-
-核心原则可以概括成一句话：
-
-> **Agent 负责判断，程序负责执法。**
+Pi 不是 Word 写入器，也不能绕过 Teacher Gate。
 
 ---
 
-## V0.4 的 Agent 为什么不只是固定 Workflow？
+## Review Session
 
-第一阶段仍然是明确流程：
+V0.6 引入了可恢复的审稿会话，用来保存当前审稿过程中的状态，包括候选、老师决定、历史召回和必要的运行信息。
 
-```text
-打开稿件 → 规则检查 → 历史候选召回
-```
+这使老师可以：
 
-但在论证取证阶段，Pi 拿到的是有限工具，而不是一条写死的“先 A 再 B 再 C”路径：
+- 中途退出后继续处理候选；
+- 把 AI 第一轮和老师最终决定分开；
+- 在候选尚未处理完时阻止正式导出；
+- 从已保存 Session 重新生成正式稿。
 
-```text
-list_outline
-read_section
-read_paragraphs
-find_text
-record_argument_finding
-commit_review
-```
-
-例如它看到结论里写：
-
-> “该方法显著提升了分类准确率。”
-
-Agent 可以继续去实验章节寻找：
-
-- 实际提升幅度是多少？
-- 有没有 baseline？
-- 有没有显著性检验？
-- 是否存在与结论冲突的数据？
-
-证据不足时不调用 `record_argument_finding`。
-
-因此当前更准确的定义是：
-
-**Agentic workflow / bounded domain agent**，而不是一个完全自由的通用 Agent。
+API Key 不会写进 Session 快照。
 
 ---
 
-## 证据门：模型不能直接往 Word 里“编批注”
+## 当前验证到什么程度
 
-V0.4 对模型输出做了程序级限制。
+### 自动化测试
 
-### 历史复犯
-
-Pi 只有调用 `confirm_history_finding` 才能写入历史复犯，而且必须满足：
-
-- `issue_id` 是当前老师 / 学生的已确认历史问题
-- 新稿 `quote` 真实存在
-- `quote` 与字符串召回位置一致
-- 旧稿问题记录能对上
-
-### 论证取证
-
-`record_argument_finding` 要求：
-
-- `claim_quote` 必须真实存在于稿件
-- `evidence_quote` 必须真实存在于稿件
-- 最多写入 3 条论证 finding
-- Agent 最多进行有限次数的导航
-- 单次只能读取有限段落和字符
-
-如果模型引用了稿件里不存在的文字，工具会直接拒绝。
-
----
-
-## 失败时怎么处理？
-
-项目目前采用偏保守的降级策略。
-
-### 没配置密钥
-
-- 格式规则：继续
-- 语言规则：继续
-- 历史问题：走字符串复查
-- 主张 / 证据 Agent：不运行
-
-### 已配置密钥，但 Pi 调用失败
-
-- 格式 / 语言规则：仍可离线执行
-- 未经 Pi 确认的历史字符串命中：**不写成复犯**
-- 论证 Agent finding：不写
-- GUI 会显示 warning 和未写入原因
-
-也就是说，语义能力失败时倾向于 **少报，而不是假装模型确认过**。
-
----
-
-## 历史问题是怎么保存的？
-
-历史批注和修订会转成结构化 `IssueRecord`，当前会记录类似：
-
-```text
-issue_type
-problem
-scope
-teacher_intent
-suggested_fix
-original_text
-original_span
-teacher_id
-student_id
-source_draft_id
-status
-```
-
-历史问题按老师、学生和来源稿件隔离，并且只有教师确认过的条目才进入后续复查。
-
-目前结构化主要由规则生成，不把它包装成“模型理解了老师长期偏好”。
-
----
-
-## 当前 V0.6 到了哪里？
-
-| 版本 | 状态 | 核心变化 |
-| --- | --- | --- |
-| V0.1 | ✅ | GUI、历史入库 / 确认、离线规则、Word 批注与修订 |
-| V0.2 | ✅ | 收紧历史字符串匹配，减少短批注、目录、章节重编号等误报 |
-| V0.3 | ✅ | 历史问题结构化；模型确认字符串候选是否真的是同一问题 |
-| V0.4 | ✅ 已发布 | 模型判断集中到 Pi；增加主张-证据多步取证；Python 做 evidence gate |
-| V0.5 | ✅ | 窗口直播中文进度；密钥与上次稿件路径可持久化；本机真实模型金标 `thesis-review eval` |
-| V0.6 | ✅ 已发布 | 教师确认门 + Review Session；四阶段工作台；有界第一轮初审（格式 / 语言 / 内容 / 历史 / 外部核验）；正式 Word 只写老师认可意见 |
-
-当前还没有完成：
-
-- 真实授权论文 + Windows Word 本机打开验收
-- 大规模真实论文质量评估
-- 全文排版生产级验收
-- 正式部署与长期成本评估
-
----
-
-## 测试与验证
-
-仓库公开了自动化测试，测试数据使用模拟 / 脱敏内容，不包含真实学生论文。
-
-主要覆盖：
-
-- Word 批注与修订适配
-- 历史问题入库、迁移、确认和隔离
-- 字符串 matcher 的误报边界
-- 旧稿原文 / 新稿原文标注是否正确
-- 大连财经学院规则检查
-- Pi 工具链 faux 场景
-- 历史复犯确认 / 跳过
-- claim-evidence finding
-- 证据充分时 Agent 放弃写论证批注
-- Pi 失败时 fail-closed：规则保留、未确认历史复犯不写
-
-运行：
+仓库 CI 会运行：
 
 ```bash
 python -m pytest tests -q
 ```
 
-### 文档引擎探针
+覆盖范围包括：
 
-```bash
-python -m pip install -r requirements-probe.txt
-python scripts/fetch_docxengine.py
-python scripts/probe_chinese_docx.py
-python scripts/run_upstream_tests.py
+- Word 批注与修订适配
+- 历史问题入库、召回、确认和隔离
+- Teacher Gate
+- Review Session
+- GUI 四阶段工作流
+- Agent 工具链 faux 场景
+- 打包后 EXE 的 worker / Pi 链路
+- 老师决定前不得出现正式批注或修订
+- 老师确认后才生成正式批注 / 修订
+
+### V0.6 Windows CI 烟测
+
+V0.6 发布包来自已验证 Windows CI 构建。该烟测使用 **faux-pi**，用于验证链路，不代表真实模型质量：
+
+```text
+candidates: 14
+comments_before: 0
+revisions_before: 0
+comments_after: 13
+revisions_after: 2
+agent: faux-pi
+worker_tcp_teacher_gate: true
 ```
 
-2026-09-08 的验证记录中，选定上游测试为 **130 passed / 5 skipped**。
+这里最重要的是：**老师决定前，正式 Word 中批注和修订都是 0。**
 
-中文探针覆盖：
+### 文档引擎验证
 
-- 批注提取
-- 跨 run 中文修订
-- 保留教师修订
-- 单独拒绝助手修订
+仓库还保留了 DocxEngine / 中文 Word 操作相关探针与上游测试记录，用来验证批注、中文跨 run 修订以及已有教师修订的保留行为。
 
-> 这些测试证明的是代码链路与文档操作能力，不等于“真实模型已经在真实论文上达到生产级审稿质量”。
+---
 
-当前 Pi 自动化测试使用 faux provider 的预定工具路径，主要证明 Agent plumbing 能跑；真实模型面对未参与开发的论文是否能稳定走出正确取证路径，仍需要独立评估。
+## 目前还没有完成
+
+请不要把当前版本描述成“已经完成生产级论文自动审稿”。V0.6 仍有明确边界：
+
+- 尚未在真实老师电脑上完成 Microsoft Word 手工验收；
+- 尚未使用真模型 + 授权真实学生论文完成系统性的 live eval；
+- 尚未完成大规模真实论文质量评估；
+- 尚未完成生产级全文排版兼容性验收；
+- 模型能力、费用和数据处理规则仍取决于老师配置的模型服务商。
+
+**没有命中，不代表全文没有问题；CI 通过，也不代表真实模型已经达到可替代老师的审稿质量。**
 
 ---
 
@@ -335,10 +239,10 @@ python scripts/run_upstream_tests.py
 ### 环境
 
 - Python 3.12+
-- Node.js（开发环境）
-- Windows + Microsoft Word（做最终 Word 验证时）
+- Node.js 22+
+- Windows + Microsoft Word（最终 Word 本机验证时）
 
-### 安装
+### 安装与测试
 
 ```bash
 python -m venv .venv
@@ -348,9 +252,8 @@ Windows PowerShell：
 
 ```powershell
 .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 python scripts/fetch_docxengine.py
-python scripts/fetch_node.py
 cd agent
 npm ci --omit=dev
 cd ..
@@ -358,23 +261,29 @@ python -m pytest tests -q
 powershell -File scripts/start_gui.ps1
 ```
 
-无窗口离线演示（含老师确认门，并把已确认意见写入正式 Word 批注）：
+### CLI 演示
 
 ```bash
 python -m thesis_review.cli demo --out artifacts/demo
 ```
 
-成功时会写出 `new-reviewed.docx`、`new-findings.json` 和 `teacher-gate.json`。其中 `teacher-gate.json` 记录初审后批注数为 0、老师决定后正式稿批注数，以及驳回意见未写入。已有审稿会话可用 `thesis-review export --session <id>` 再次生成正式稿。
+演示会走完整的 Teacher Gate 流程，并生成用于验证的审稿产物。
 
-本机密钥下的真实模型金标（会调用云端模型，结果写在 `artifacts/eval/`，不进 git）：
+已有 Review Session 可以重新导出正式稿：
+
+```bash
+thesis-review export --session <session-id>
+```
+
+### 真实模型 eval
+
+在本机配置模型密钥后：
 
 ```bash
 python -m thesis_review.cli eval --out artifacts/eval
 ```
 
-说明见 [`docs/eval-protocol.md`](docs/eval-protocol.md)。密钥来自窗口「模型设置」或环境变量，stdout 不会打印密钥或原文。默认 pytest 仍走预定工具路径，只证明链路。
-
-CLI 主要用于开发与测试，普通用户入口是 GUI / Windows Release。
+说明见 [`docs/eval-protocol.md`](docs/eval-protocol.md)。真实论文和密钥不应提交到 Git。
 
 ---
 
@@ -384,16 +293,19 @@ CLI 主要用于开发与测试，普通用户入口是 GUI / Windows Release。
 powershell -File scripts/build_windows.ps1
 ```
 
-构建使用 PyInstaller `--onedir`，并把运行所需的 Python 依赖、便携 Node 和 Pi 一起带入发布目录。
+构建采用 PyInstaller onedir，并把运行所需的 Python 依赖、便携 Node 和 Pi Agent 一起放进发布目录。
 
-因此老师端：
+主要产物：
 
-- 不需要 Python
-- 不需要 pip
-- 不需要单独安装 `python-docx`
-- 不需要 Node.js
+```text
+dist/论文审改助手/
+├─ 论文审改助手.exe
+├─ _internal/
+├─ agent/
+└─ runtime/node/node.exe
+```
 
-构建脚本还会运行打包后的 demo / Pi self-test，并核验 `teacher-gate.json`：初审后 Word 无批注，老师确认后正式稿含已认可意见。这避免只“打包成功”但产物不能实际走完教师确认门。
+打包脚本还会执行 smoke checks，避免出现“PyInstaller 成功，但实际 GUI / worker / Pi 链路不能运行”的假成功。
 
 ---
 
@@ -404,60 +316,62 @@ thesis-review-agent/
 ├─ agent/                         # Pi Agent runtime 与工具编排
 ├─ python/thesis_review/
 │  ├─ checks/                    # 格式 / 语言确定性规则
-│  ├─ history/                   # 历史问题入库、结构化、匹配
-│  ├─ gui/                       # PyWebView GUI
-│  ├─ word/                      # DOCX 适配与写回
-│  ├─ service.py                 # 业务入口 / fallback
-│  └─ worker.py                  # Pi 可调用的受控 Python 工具
+│  ├─ history/                   # 历史问题与召回
+│  ├─ gui/                       # 四阶段教师工作台
+│  ├─ word/                      # DOCX 适配、批注与修订
+│  ├─ session.py                 # Review Session
+│  ├─ service.py                 # 审稿业务入口
+│  └─ worker.py                  # Agent 可调用的受控 Python 工具
 ├─ tests/                        # 自动化测试与模拟用例
-├─ docs/                         # 需求、学校规则、开源选型
+├─ docs/                         # 规则、需求、评估协议
 ├─ evidence/                     # 文档引擎验证记录
-└─ scripts/                      # 构建、探针、运行脚本
+└─ scripts/                      # 构建、探针与运行脚本
 ```
 
-更详细的范围与验收方式见：
+更多文档：
 
 - [`docs/requirements.md`](docs/requirements.md)
 - [`docs/dalian-finance-2026.md`](docs/dalian-finance-2026.md)
-- [`docs/open-source-plan.md`](docs/open-source-plan.md)
 - [`docs/eval-protocol.md`](docs/eval-protocol.md)
+- [`docs/open-source-plan.md`](docs/open-source-plan.md)
 - [`evidence/oss-validation.json`](evidence/oss-validation.json)
 
 ---
 
 ## 隐私与数据
 
-这个项目默认把真实论文、教师批注和历史记录留在本机。
+项目默认把真实论文、历史批注、Review Session 和模型设置保存在本机。
 
-仓库不会提交：
+仓库不应提交：
 
 - 真实学生论文
 - 未脱敏教师批注
 - API Key
-- 私人历史数据库
+- 私人历史数据库 / Review Session
 
-如果配置云端模型，对应模型调用会把完成当前判断所需的有限文本发送给你配置的模型服务商；具体数据处理规则取决于你使用的 API / Base URL 提供方。
+如果配置云端模型或外部检索，完成当前判断所需的有限文本可能会发送给对应服务商；具体数据处理规则取决于老师实际配置的 API / Base URL / 服务提供方。
 
-请只在获得授权的情况下处理真实论文。
+请只在获得授权的情况下处理真实学生论文。
 
 ---
 
-## 已知限制
+## 版本演进
 
-- 离线历史召回会写成「待老师判断」的候选，不会直接标成「复犯」；有模型密钥时，Pi 必须调用 `confirm_history_finding` 才会写成复犯。
-- 过短的老师批注可能无法进入字符串召回。
-- 无模型密钥时，标题原文未改但正文已修复的情况仍可能产生历史匹配误差。
-- 中英文混排时，部分正文字数规则可能偏短。
-- V0.6 的内容审查覆盖论证、数据一致性、方法、实验等，但仍不是全文论证类型穷尽。
-- faux Agent 测试证明链路，不证明真实模型质量。真实模型是否会取证见 [`docs/eval-protocol.md`](docs/eval-protocol.md)。
-- Word 文档层已经做过探针和本机打开验证，但仍不是生产级全文排版验收。
+| 版本 | 核心变化 |
+| --- | --- |
+| V0.1 | GUI、历史问题入库、离线规则、Word 批注与修订 |
+| V0.2 | 收紧历史字符串匹配，减少明显误报 |
+| V0.3 | 历史问题结构化；模型辅助确认复犯 |
+| V0.4 | Pi Agent runtime、主张—证据取证、程序级 Evidence Gate |
+| V0.5 | 中文实时进度、设置持久化、真实模型 eval 入口 |
+| **V0.6** | **教师确认门、Review Session、四阶段教师工作台、有界第一轮审阅、正式 Word 只写老师认可意见** |
+
+V0.6 不是对 V0.4 页面做的一次小修，而是把产品从“AI 初筛器”推进成了 **以老师最终裁决为核心的审稿工作台**。
 
 ---
 
 ## License
 
-本仓库原创代码与文档采用 [MIT License](LICENSE)。
+本仓库原创代码与文档采用 [MIT License](LICENSE)。第三方项目保留各自许可证，见 [`THIRD_PARTY.md`](THIRD_PARTY.md)。
 
-第三方项目保留各自许可证，见 [`THIRD_PARTY.md`](THIRD_PARTY.md)。
-
-如果提交测试样例，请只使用模拟内容或已经授权、充分脱敏的数据。
+如果提交测试样例，请只使用模拟内容，或已经获得授权并充分脱敏的数据。
