@@ -93,6 +93,32 @@ def test_run_pi_review_deletes_stale_worker_portfile(tmp_path: Path, monkeypatch
     assert not stale.exists()
 
 
+def test_run_pi_review_maps_timeout_to_review_error(tmp_path: Path, monkeypatch):
+    import subprocess
+
+    from thesis_review.errors import ReviewError
+
+    def boom(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["node", "review.mjs"], timeout=180)
+
+    monkeypatch.setattr("thesis_review.runtime.subprocess.run", boom)
+    monkeypatch.setattr("thesis_review.runtime.resolve_node", lambda: Path("node"))
+    try:
+        run_pi_review(
+            {
+                "home": str(tmp_path),
+                "teacher_id": "teacher-a",
+                "student_id": "zhou",
+                "output_dir": str(tmp_path / "eval-case"),
+            }
+        )
+    except ReviewError as exc:
+        assert exc.code == "pi_timeout"
+        assert "Command" not in str(exc)
+    else:
+        raise AssertionError("expected pi_timeout")
+
+
 def test_run_pi_review_writes_redacted_request_and_honors_timeout(tmp_path: Path, monkeypatch):
     captured: dict = {}
 

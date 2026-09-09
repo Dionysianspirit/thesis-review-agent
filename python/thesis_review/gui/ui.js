@@ -461,9 +461,11 @@ function renderTechLog(entries) {
     return;
   }
   body.textContent = entries.map((item) => {
-    const flag = item.ok === false ? "失败" : "完成";
+    const flag = item.ok === false ? "未完成" : "完成";
+    const name = item.label || item.op;
     const heading = item.heading ? `  ${item.heading}` : "";
-    return `${flag}  ${item.op}${heading}`;
+    const why = item.ok === false && item.reason ? `  ${item.reason}` : "";
+    return `${flag}  ${name}${heading}${why}`;
   }).join("\n");
 }
 

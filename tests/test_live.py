@@ -67,6 +67,21 @@ def test_read_progress_returns_current_sentence_and_findings(tmp_path: Path):
     assert progress["findings"][0]["id"] == "rule-A-1"
     ops = [item["op"] for item in progress["tech_log"]]
     assert ops == ["open_draft", "list_outline", "list_paragraphs", "read_section"]
+    assert progress["tech_log"][1]["label"] == "读取结构"
+
+
+def test_failed_tool_events_carry_chinese_reason(tmp_path: Path):
+    live = tmp_path / "live"
+    append_event(live, {"op": "find_text", "ok": False, "code": "invalid_params"})
+    append_event(live, {"op": "record_content_finding", "ok": False, "code": "quote_not_in_draft"})
+    append_event(live, {"op": "read_paragraphs", "ok": False, "code": "nav_budget"})
+    progress = read_progress(live)
+    by_op = {item["op"]: item for item in progress["tech_log"]}
+    assert by_op["find_text"]["label"] == "检索原文"
+    assert by_op["find_text"]["reason"] == "参数不完整"
+    assert by_op["record_content_finding"]["label"] == "写内容候选"
+    assert by_op["record_content_finding"]["reason"] == "原文对不上"
+    assert by_op["read_paragraphs"]["reason"] == "阅读次数已用尽"
 
 
 def test_read_progress_missing_dir_is_empty(tmp_path: Path):

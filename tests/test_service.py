@@ -155,3 +155,63 @@ def test_pi_failure_hides_node_stack_from_teachers(tmp_path: Path, monkeypatch):
     assert "ECONNREFUSED" not in result.warning
     assert "离线规则" in result.warning
 
+
+def test_timeout_warning_hides_command_list():
+    from thesis_review.service import offline_fallback_warning
+
+    timed = RuntimeError(
+        "Command '['C:\\\\Users\\\\ASUS\\\\Downloads\\\\thesis-review-agent-v0.6.1-windows\\\\runtime\\\\node\\\\node.exe', "
+        "'C:\\\\Users\\\\ASUS\\\\Downloads\\\\thesis-review-agent-v0.6.1-windows\\\\agent\\\\review.mjs']' timed out after 180 seconds"
+    )
+    warning = offline_fallback_warning(timed, semantic=True)
+    assert "Command" not in warning
+    assert "node.exe" not in warning
+    assert "等待时间" in warning
+    assert "复犯" in warning
+
+
+def test_pi_timeout_keeps_live_findings(tmp_path: Path, monkeypatch):
+    from thesis_review.errors import ReviewError
+    from thesis_review.live import write_findings
+
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+
+    def _boom(self, **_kwargs):
+        write_findings(
+            tmp_path / "out" / "live",
+            [
+                {
+                    "id": "content-1",
+                    "source": "model",
+                    "kind": "content",
+                    "subtype": "argument",
+                    "category": "论证",
+                    "problem": "主张缺少证据。",
+                    "rationale": "实验段落未给出对照。",
+                    "quote": "准确率显著提升",
+                    "anchor": "p1",
+                }
+            ],
+        )
+        raise ReviewError("pi_timeout", "模型初审超过等待时间，已停止。")
+
+    monkeypatch.setattr(ThesisReviewService, "_review_with_pi", _boom)
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="new",
+        data=sample_new_draft(),
+        output_dir=tmp_path / "out",
+        use_model=True,
+        settings=AppSettings(api_key="sk-test", model="gpt-4o-mini"),
+    )
+    assert any(item.id == "content-1" for item in result.findings)
+    assert result.used_model is True
+    assert "已保留" in result.warning
+    assert "离线规则" not in result.warning
+    assert "Command" not in result.warning
+
