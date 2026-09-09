@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -32,17 +32,32 @@ function parseArgs(argv) {
   return out;
 }
 
-function waitForPortfile(file, timeoutMs = 20000) {
+function removeIfExists(file) {
+  try {
+    unlinkSync(file);
+  } catch (error) {
+    if (error && error.code !== "ENOENT") throw error;
+  }
+}
+
+function waitForPortfile(file, timeoutMs = 20000, minMtimeMs = 0) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const timer = setInterval(() => {
-      if (existsSync(file)) {
-        const text = readFileSync(file, "utf8").trim();
-        if (text) {
-          clearInterval(timer);
-          resolve(Number(text));
-          return;
+      try {
+        if (existsSync(file)) {
+          const stamp = statSync(file).mtimeMs;
+          if (stamp >= minMtimeMs) {
+            const port = Number(readFileSync(file, "utf8").trim());
+            if (Number.isInteger(port) && port > 0 && port <= 65535) {
+              clearInterval(timer);
+              resolve(port);
+              return;
+            }
+          }
         }
+      } catch {
+        // portfile can appear while we read it
       }
       if (Date.now() - started > timeoutMs) {
         clearInterval(timer);
@@ -52,7 +67,35 @@ function waitForPortfile(file, timeoutMs = 20000) {
   });
 }
 
+function connectWorker(port, timeoutMs = 1000) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`worker connect timeout ${port}`));
+    }, timeoutMs);
+    const onError = (error) => {
+      clearTimeout(timer);
+      socket.destroy();
+      reject(error);
+    };
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.off("error", onError);
+      resolve(socket);
+    });
+    socket.once("error", onError);
+  });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function startWorker(cfg) {
+  const portfile = path.join(cfg.output_dir, "worker.port");
+  removeIfExists(portfile);
+  const spawnedAt = Date.now();
   const args = [
     ...(cfg.worker_args || [
       "-m",
@@ -67,7 +110,7 @@ async function startWorker(cfg) {
       cfg.major || "人工智能",
     ]),
     "--portfile",
-    path.join(cfg.output_dir, "worker.port"),
+    portfile,
   ];
   const child = spawn(cfg.python, args, {
     env: {
@@ -84,16 +127,46 @@ async function startWorker(cfg) {
   child.stderr.on("data", (chunk) => {
     stderr += chunk;
   });
-  const port = await waitForPortfile(path.join(cfg.output_dir, "worker.port"));
-  const socket = net.createConnection({ host: "127.0.0.1", port });
-  await new Promise((resolve, reject) => {
-    const onError = (error) => reject(error);
-    socket.once("connect", () => {
-      socket.off("error", onError);
-      resolve();
+  const exitError = new Promise((_, reject) => {
+    child.once("exit", (code, signal) => {
+      reject(new Error(`worker exited ${code ?? signal}: ${stderr.trim() || "no stderr"}`));
     });
-    socket.once("error", onError);
   });
+  exitError.catch(() => {});
+  let port;
+  try {
+    port = await Promise.race([waitForPortfile(portfile, 20000, spawnedAt - 100), exitError]);
+  } catch (error) {
+    try {
+      child.kill();
+    } catch {
+      // already gone
+    }
+    throw error;
+  }
+  let socket;
+  let lastError;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    if (child.exitCode != null || child.signalCode) {
+      throw new Error(`worker exited ${child.exitCode ?? child.signalCode}: ${stderr.trim() || "no stderr"}`);
+    }
+    try {
+      socket = await connectWorker(port);
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      await sleep(50);
+    }
+  }
+  if (!socket) {
+    try {
+      child.kill();
+    } catch {
+      // already gone
+    }
+    throw lastError || new Error("worker connect failed");
+  }
   const pending = new Map();
   const rl = readline.createInterface({ input: socket });
   rl.on("error", () => {});

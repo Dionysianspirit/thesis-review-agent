@@ -47,6 +47,21 @@ from thesis_review.word.adapter import WordAdapter
 ASSISTANT_AUTHOR = "审改助手"
 
 
+def offline_fallback_warning(exc: BaseException, *, semantic: bool) -> str:
+    text = str(exc).replace("\r", "\n")
+    if "ECONNREFUSED" in text or "worker portfile" in text or "worker connect" in text:
+        detail = "本地审稿服务未能连上，请再试一次。"
+    else:
+        first = next((line.strip() for line in text.splitlines() if line.strip()), "模型审查失败")
+        if " at " in first:
+            first = first.split(" at ", 1)[0].strip()
+        detail = first[:180]
+    warning = f"模型审查未能完成，已改用离线规则。{detail}"
+    if semantic:
+        warning += " 历史问题未经确认，未写成复犯。"
+    return warning
+
+
 class ThesisReviewService:
     def __init__(
         self,
@@ -251,9 +266,7 @@ class ThesisReviewService:
             except Exception as exc:  # noqa: BLE001 - fall back to offline rules
                 if not offline_fallback:
                     raise
-                warning = f"模型审查未能完成，已改用离线规则。{exc}"
-                if semantic:
-                    warning += " 历史问题未经确认，未写成复犯。"
+                warning = offline_fallback_warning(exc, semantic=semantic)
         append_event(live, {"op": "open_draft", "ok": True})
         opened = self.adapter.open_bytes(data)
         paragraphs = self.adapter.list_paragraphs(opened)

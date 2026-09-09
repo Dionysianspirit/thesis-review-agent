@@ -219,3 +219,52 @@ def test_web_needed_records_external_only_with_real_sources(tmp_path: Path):
         assert externals == []
     comments = WordAdapter().extract_comments(WordAdapter().open_path(result.reviewed_path))
     assert comments == []
+
+
+def test_repeated_faux_review_ignores_stale_worker_port(tmp_path: Path):
+    import os
+    import socket
+    import time
+
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+    leftover = output_dir / "worker.port"
+    leftover.write_text(str(dead_port), encoding="ascii")
+    past = time.time() - 120
+    os.utime(leftover, (past, past))
+
+    first = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="overclaim",
+        data=sample_overclaim_draft(),
+        output_dir=output_dir,
+        use_pi=True,
+        faux=True,
+        faux_scenario="skip_history",
+        offline_fallback=False,
+    )
+    assert not first.warning
+    second = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="overclaim-2",
+        data=sample_overclaim_draft(),
+        output_dir=output_dir,
+        use_pi=True,
+        faux=True,
+        faux_scenario="skip_history",
+        offline_fallback=False,
+    )
+    assert not second.warning
+    assert first.findings
+    assert second.findings

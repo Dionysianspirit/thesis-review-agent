@@ -726,28 +726,40 @@ def _handle_line(worker: Worker, line: str) -> str:
         return json.dumps({"id": ident, "error": {"code": code, "message": str(exc)}}, ensure_ascii=False)
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="ascii")
+    tmp.replace(path)
+
+
 def _serve_tcp(worker: Worker, portfile: Path) -> None:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", 0))
-    server.listen(1)
-    portfile.parent.mkdir(parents=True, exist_ok=True)
-    portfile.write_text(str(server.getsockname()[1]), encoding="ascii")
-    conn, _unused = server.accept()
-    with conn:
-        buffer = b""
-        while True:
-            chunk = conn.recv(65536)
-            if not chunk:
-                break
-            buffer += chunk
-            while b"\n" in buffer:
-                raw, buffer = buffer.split(b"\n", 1)
-                line = raw.decode("utf-8").strip()
-                if not line:
-                    continue
-                conn.sendall((_handle_line(worker, line) + "\n").encode("utf-8"))
-    server.close()
+    server.listen(8)
+    _atomic_write_text(portfile, str(server.getsockname()[1]))
+    try:
+        conn, _unused = server.accept()
+        with conn:
+            buffer = b""
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    raw, buffer = buffer.split(b"\n", 1)
+                    line = raw.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    conn.sendall((_handle_line(worker, line) + "\n").encode("utf-8"))
+    finally:
+        server.close()
+        try:
+            portfile.unlink()
+        except OSError:
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:

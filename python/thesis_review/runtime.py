@@ -140,6 +140,8 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
         json.dumps(redact_pi_request(payload), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    stale_portfile = Path(payload["output_dir"]) / "worker.port"
+    stale_portfile.unlink(missing_ok=True)
     command = [str(node), str(script), "--request", str(request_path)]
     if faux:
         command.append("--faux")

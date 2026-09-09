@@ -116,3 +116,42 @@ def test_pi_failure_with_key_skips_history_but_keeps_rules(tmp_path: Path, monke
     assert result.warning
     assert "复犯" in result.warning or "历史" in result.warning or "离线" in result.warning
 
+
+def test_pi_failure_hides_node_stack_from_teachers(tmp_path: Path, monkeypatch):
+    from thesis_review.service import offline_fallback_warning
+
+    stacked = (
+        "Error: connect ECONNREFUSED 127.0.0.1:62852 at "
+        "TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16)"
+    )
+    warning = offline_fallback_warning(RuntimeError(stacked), semantic=True)
+    assert "离线规则" in warning
+    assert "请再试一次" in warning
+    assert "复犯" in warning
+    assert "TCPConnectWrap" not in warning
+    assert "62852" not in warning
+    assert "ECONNREFUSED" not in warning
+
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+
+    def _boom(self, **_kwargs):
+        raise RuntimeError(stacked)
+
+    monkeypatch.setattr(ThesisReviewService, "_review_with_pi", _boom)
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="new",
+        data=sample_new_draft(),
+        output_dir=tmp_path / "out",
+        use_model=True,
+        settings=AppSettings(api_key="sk-test", model="gpt-4o-mini"),
+    )
+    assert "TCPConnectWrap" not in result.warning
+    assert "ECONNREFUSED" not in result.warning
+    assert "离线规则" in result.warning
+
