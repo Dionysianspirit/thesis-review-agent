@@ -146,3 +146,11 @@ def test_app_entry_routes_worker_cli_and_gui(monkeypatch):
     assert gui_app.main() == 22
     monkeypatch.setattr(sys, "argv", ["论文审改助手.exe"])
     assert gui_app.main() == 33
+
+
+def test_open_reviewed_reports_missing_word_file(tmp_path: Path):
+    bridge = Bridge(tmp_path)
+    bridge.reviewed_path = str(tmp_path / "missing-reviewed.docx")
+    result = bridge.open_reviewed()
+    assert result["ok"] is False
+    assert "找不到" in result["message"]

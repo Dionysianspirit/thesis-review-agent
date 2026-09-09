@@ -446,14 +446,20 @@ class Bridge:
         return self._open_path(self.output_dir)
 
     def _open_path(self, target: str) -> dict:
-        starter = getattr(os, "startfile", None)
-        if starter is not None:
-            starter(target)
-            return {"ok": True}
-        opener = shutil.which("xdg-open") or shutil.which("open")
-        if opener:
-            subprocess.Popen([opener, target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return {"ok": True}
+        path = Path(target)
+        if not path.exists():
+            return {"ok": False, "message": f"找不到文件：{target}"}
+        try:
+            starter = getattr(os, "startfile", None)
+            if starter is not None:
+                starter(str(path))
+                return {"ok": True}
+            opener = shutil.which("xdg-open") or shutil.which("open")
+            if opener:
+                subprocess.Popen([opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return {"ok": True}
+        except OSError as exc:
+            return {"ok": False, "message": f"无法打开 Word 文件：{exc}"}
         return {"ok": False, "message": "当前系统无法直接打开 Word。请到结果文件夹手动打开正式稿。"}
 
     def _stage(self) -> str:

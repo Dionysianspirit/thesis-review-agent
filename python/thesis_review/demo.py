@@ -20,15 +20,35 @@ def _comment_texts(adapter: WordAdapter, path: Path | str) -> list[str]:
     return [item.text for item in adapter.extract_comments(adapter.open_path(target))]
 
 
+def _revision_texts(adapter: WordAdapter, path: Path | str) -> list[str]:
+    target = Path(path)
+    if not target.is_file():
+        return []
+    return [
+        f"{item.kind}:{item.text}"
+        for item in adapter.extract_revisions(adapter.open_path(target))
+        if item.text
+    ]
+
+
 def apply_demo_teacher_decisions(service: ThesisReviewService, session_id: str) -> dict:
-    """Accept format in batch, edit one candidate, reject remaining pending items."""
+    """Accept format in batch, edit one candidate, reject remaining pending items.
+
+    Prefer editing a language finding that applies a tracked revision so the
+    formal Word file contains both 批注 and 修订, matching how teachers work.
+    """
     service.accept_format_findings(session_id)
     session = service.sessions.get(session_id)
     pending = [item for item in session.findings if item.teacher_decision == DECISION_PENDING]
     accepted = [item for item in session.findings if item.teacher_decision == DECISION_ACCEPTED]
     edited_id = ""
     rejected_ids: list[str] = []
-    edit_target = pending[0] if pending else (accepted[0] if accepted else None)
+    both = [
+        item
+        for item in pending + accepted
+        if item.apply in {"revision", "both"} and item.suggested_old and item.suggested_new
+    ]
+    edit_target = both[0] if both else (pending[0] if pending else (accepted[0] if accepted else None))
     if edit_target is not None:
         service.decide_finding(
             session_id=session_id,
@@ -109,17 +129,32 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path, *, faux: bo
     )
     adapter = service.adapter
     comments_before = _comment_texts(adapter, result.reviewed_path)
+    revisions_before = _revision_texts(adapter, result.reviewed_path)
     source_comments = _comment_texts(adapter, result.source_path)
+    source_revisions = _revision_texts(adapter, result.source_path)
     original_comments = _comment_texts(adapter, drafts["new"])
     decisions = apply_demo_teacher_decisions(service, result.session_id)
     exported = service.export_final(session_id=result.session_id, allow_pending=False)
     reviewed_path = Path(exported.get("reviewed_path") or result.reviewed_path)
     comments_after = _comment_texts(adapter, reviewed_path)
+    revisions_after = _revision_texts(adapter, reviewed_path)
     blob = "\n".join(comments_after)
     session = service.sessions.get(result.session_id)
     rejected_absent = all(problem not in blob for problem in decisions["rejected_problems"] if problem)
     edited_present = (not decisions["edited_text"]) or decisions["edited_text"] in blob
     stats = session_stats(session.findings)
+    tracked = [
+        item
+        for item in session.findings
+        if item.teacher_decision in {DECISION_ACCEPTED, DECISION_EDITED}
+        and item.apply in {"revision", "both"}
+        and item.suggested_old
+        and item.suggested_new
+    ]
+    rev_blob = "\n".join(revisions_after)
+    tracked_present = (not tracked) or any(
+        (item.suggested_old in rev_blob or item.suggested_new in rev_blob) for item in tracked
+    )
     trace_path = output_dir / "new-trace.json"
     trace_ops: list[str] = []
     if trace_path.is_file():
@@ -145,9 +180,13 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path, *, faux: bo
         and stats["formal"] >= 1
         and not result.warning
         and pi_trace_ok
+        and not revisions_before
+        and not source_revisions
+        and tracked_present
+        and (not tracked or revisions_after)
     )
     error = ""
-    if comments_before or source_comments:
+    if comments_before or source_comments or revisions_before or source_revisions:
         error = "AI 初审后不应把候选意见写入 Word。"
     elif not result.findings:
         error = "演示稿没有产生候选意见。"
@@ -159,6 +198,10 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path, *, faux: bo
         error = str(exported.get("message") or "未能生成正式审稿稿件。")
     elif not comments_after:
         error = "正式稿没有写入老师认可批注。"
+    elif tracked and not revisions_after:
+        error = "正式稿没有写入老师认可的修订。"
+    elif not tracked_present:
+        error = "老师确认的文字修订没有出现在正式 Word 中。"
     elif not edited_present:
         error = "老师改写文本没有出现在正式 Word 批注中。"
     elif not rejected_absent:
@@ -176,6 +219,13 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path, *, faux: bo
         "findings_path": str(result.findings_path),
         "source_comments": len(source_comments),
         "original_comments": len(original_comments),
+        "revisions_before": len(revisions_before),
+        "revisions_after": len(revisions_after),
+        "source_revisions": len(source_revisions),
+        "tracked_revisions": [
+            {"old": item.suggested_old, "new": item.suggested_new} for item in tracked
+        ],
+        "tracked_present": tracked_present,
         "teacher_edited_text": decisions["edited_text"],
         "teacher_edited_present": edited_present,
         "rejected_problems": decisions["rejected_problems"],

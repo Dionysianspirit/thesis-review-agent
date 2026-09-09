@@ -27,6 +27,7 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     assert "CREATE_NO_WINDOW" in smoke
     assert "论文审改助手.exe" in smoke
     assert "smoke_pi_selftest" in smoke
+    assert "revisions_before" in smoke
     windows = (ROOT / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
     assert "pyinstaller_build.py" in windows
     assert "rename_dist.py" in windows

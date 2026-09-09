@@ -23,6 +23,11 @@ def test_demo_command_writes_teacher_approved_word_comments(tmp_path: Path, monk
     assert payload["comments_before"] == 0
     assert payload["source_comments"] == 0
     assert payload["original_comments"] == 0
+    assert payload["revisions_before"] == 0
+    assert payload["source_revisions"] == 0
+    assert payload["revisions_after"] >= 1
+    assert payload["tracked_present"] is True
+    assert payload["tracked_revisions"]
     assert payload["candidates"] >= 1
     assert payload["n_exported"] >= 1
     assert payload["comments_after"] >= 1
@@ -49,6 +54,9 @@ def test_demo_faux_agent_still_waits_for_teacher_word_comments(tmp_path: Path, m
     assert "run_checks" in payload["trace_ops"]
     assert payload["comments_before"] == 0
     assert payload["n_exported"] >= 1
+    assert payload["revisions_before"] == 0
+    assert payload["revisions_after"] >= 1
+    assert payload["tracked_present"] is True
     comments = WordAdapter().extract_comments(WordAdapter().open_path(out / "new-reviewed.docx"))
     blob = "\n".join(item.text for item in comments)
     assert TEACHER_EDIT_TEXT in blob
@@ -80,3 +88,5 @@ def test_export_command_rewrites_teacher_docx(tmp_path: Path, monkeypatch):
     comments = WordAdapter().extract_comments(WordAdapter().open_path(dest))
     assert comments
     assert TEACHER_EDIT_TEXT in "\n".join(item.text for item in comments)
+    revisions = WordAdapter().extract_revisions(WordAdapter().open_path(dest))
+    assert revisions

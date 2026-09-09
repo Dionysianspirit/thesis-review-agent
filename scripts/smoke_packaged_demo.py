@@ -88,8 +88,12 @@ def assert_teacher_gate(payload: dict) -> dict:
         raise SystemExit(payload.get("error") or "teacher-gate demo failed")
     if int(payload.get("comments_before", 0)) != 0:
         raise SystemExit("teacher gate failed: comments written before teacher decisions")
+    if int(payload.get("revisions_before", 0)) != 0:
+        raise SystemExit("teacher gate failed: revisions written before teacher decisions")
     if int(payload.get("n_exported") or 0) < 1 or int(payload.get("comments_after") or 0) < 1:
         raise SystemExit("packaged demo did not export teacher-approved Word comments")
+    if payload.get("tracked_revisions") and int(payload.get("revisions_after") or 0) < 1:
+        raise SystemExit("packaged demo did not export teacher-approved tracked revisions")
     return payload
 
 
@@ -277,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
                         "comments_before",
                         "comments_after",
                         "n_exported",
+                        "revisions_before",
+                        "revisions_after",
                         "agent",
                         "pi_trace_ok",
                     )
