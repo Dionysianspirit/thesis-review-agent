@@ -9,17 +9,15 @@
 
 ---
 
-## ⬇️ 老师：直接下载使用
+## ⬇️ 老师：Windows 使用
 
-**[下载 Windows 最新版](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)**
+GitHub Release 的 **latest 目前仍是 V0.4**，没有教师确认门，不能当作 V0.6 使用。V0.6 请在 Windows 10 / 11（已安装 Microsoft Word）上从本仓库打包：
 
-适用环境：
+```powershell
+powershell -File scripts/build_windows.ps1
+```
 
-- Windows 10 / 11
-- 已安装 Microsoft Word
-- **不需要安装 Python、Node.js 或开发环境**
-- 解压后运行 `论文审改助手.exe`
-- 首次启动若被 Windows SmartScreen 拦截，可选择「仍要运行」
+完成后运行 `dist\论文审改助手\论文审改助手.exe`。老师不需要另行安装 Python 或 Node；首次启动若被 SmartScreen 拦截，选择「仍要运行」。V0.6 Release 发布前，请不要下载 V0.4 安装包。
 
 模型密钥是可选的。密钥只保存在本机 `%APPDATA%\ThesisReviewAgent\`，不会打进安装包，也不会提交到仓库。
 

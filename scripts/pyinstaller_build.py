@@ -69,14 +69,12 @@ def pyinstaller_command() -> list[str]:
             "docxengine",
             "--collect-all",
             "docx",
+            "--collect-all",
+            "webview",
         ]
     )
     if os.name == "nt":
         command.insert(command.index("--onedir") + 1, "--windowed")
-        command.extend(["--collect-all", "webview"])
-    else:
-        # Linux smoke only needs the demo/worker argv path; skip GTK/WebKit.
-        command.extend(["--exclude-module", "webview", "--exclude-module", "gi"])
     command.append(str(ROOT / "python" / "thesis_review" / "gui" / "app.py"))
     return command
 

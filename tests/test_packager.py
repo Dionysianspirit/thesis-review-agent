@@ -10,6 +10,8 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     packager = (ROOT / "scripts" / "pyinstaller_build.py").read_text(encoding="utf-8")
     assert "--collect-all" in packager
     assert '"docx"' in packager
+    assert "webview" in packager
+    assert "--exclude-module" not in packager
     assert "xml.etree.ElementTree" in packager
     assert "docxengine" in packager
     assert "ensure_docx_layout" in packager
@@ -21,6 +23,10 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     assert "comments_before" in smoke
     assert "smoke_worker_teacher_gate" in smoke
     assert "smoke_pi_selftest" in smoke
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "build_windows.ps1" in workflow
+    assert "windows-latest" in workflow
+    assert "python -m pytest tests -q" in workflow
 
 
 def test_packager_teacher_gate_treats_zero_comments_before_as_success():
@@ -39,6 +45,15 @@ def test_packager_teacher_gate_treats_zero_comments_before_as_success():
         assert "teacher gate" in str(exc)
     else:
         raise AssertionError("expected comments_before>0 to fail")
+
+
+def test_readme_does_not_ship_v04_as_v06():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "仍是 V0.4" in text
+    assert "build_windows.ps1" in text
+    assert "论文审改助手.exe" in text
+    # Latest GitHub Release is still V0.4; do not send teachers there as V0.6.
+    assert "](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)" not in text
 
 
 def test_word_engine_traces_frozen_stdlib_deps():
