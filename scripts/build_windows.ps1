@@ -29,6 +29,7 @@ $EngineData = ".vendor\docxengine\src;docxengine"
     --add-data $EngineData `
     --hidden-import thesis_review `
     --hidden-import thesis_review.gui.app `
+    --hidden-import thesis_review.demo `
     --hidden-import docx `
     --collect-submodules thesis_review `
     --collect-all webview `

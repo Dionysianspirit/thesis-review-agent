@@ -8,8 +8,6 @@ import threading
 from dataclasses import asdict
 from pathlib import Path
 
-import webview
-
 from thesis_review.cli import build_service, main as cli_main
 from thesis_review.worker import main as worker_main
 from thesis_review.fixtures import write_demo_drafts
@@ -548,6 +546,8 @@ class Bridge:
         return documents
 
     def _pick(self, *, multiple: bool) -> list[str]:
+        import webview
+
         if self.window is None:
             return []
         dialog = getattr(webview, "FileDialog", None)
@@ -563,6 +563,8 @@ class Bridge:
 
 
 def start_gui() -> int:
+    import webview
+
     home = app_home()
     home.mkdir(parents=True, exist_ok=True)
     bridge = Bridge(home)

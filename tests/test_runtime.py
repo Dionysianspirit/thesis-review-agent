@@ -101,3 +101,25 @@ def test_run_pi_review_writes_redacted_request_and_honors_timeout(tmp_path: Path
     assert "api_key" not in json.loads(dumped)
     assert captured["timeout"] == 600
     assert captured["env"]["THESIS_API_KEY"] == "sk-secret"
+
+
+def test_frozen_worker_args_use_exe_worker_subcommand(monkeypatch):
+    import sys
+
+    from thesis_review.runtime import _default_worker_args
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    args = _default_worker_args(
+        {
+            "home": "/appdata/home",
+            "teacher_id": "teacher-a",
+            "student_id": "zhou",
+            "major": "人工智能",
+            "session_id": "sess-1",
+        }
+    )
+    assert args[0] == "worker"
+    assert "-m" not in args
+    assert args[args.index("--home") + 1] == "/appdata/home"
+    assert "--session" in args
+    assert args[args.index("--session") + 1] == "sess-1"

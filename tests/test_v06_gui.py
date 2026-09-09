@@ -130,3 +130,17 @@ def test_failed_review_marks_session_failed(tmp_path: Path):
     assert bridge.session is not None
     stored = bridge.service.sessions.get(bridge.session.id)
     assert stored.status == "failed"
+
+
+def test_app_entry_routes_worker_cli_and_gui(monkeypatch):
+    from thesis_review.gui import app as gui_app
+
+    monkeypatch.setattr(gui_app, "worker_main", lambda argv: 11)
+    monkeypatch.setattr(gui_app, "cli_main", lambda argv: 22)
+    monkeypatch.setattr(gui_app, "start_gui", lambda: 33)
+    monkeypatch.setattr(sys, "argv", ["论文审改助手.exe", "worker", "--home", "x"])
+    assert gui_app.main() == 11
+    monkeypatch.setattr(sys, "argv", ["论文审改助手.exe", "--home", "h", "demo", "--out", "o"])
+    assert gui_app.main() == 22
+    monkeypatch.setattr(sys, "argv", ["论文审改助手.exe"])
+    assert gui_app.main() == 33
