@@ -280,6 +280,80 @@ V0.6 现在进入的是**真机验收阶段**，不是继续堆功能。下一�
 
 > **不要一次把上面的候选全部实现。**先完成 V0.6 真机验收和真实论文质量基线，再让真实误报 / 漏报 / 老师采用数据决定 V0.7 的第一刀。
 
+### 4. 研究型迭代框架（可作为未来论文 / Benchmark 路线）
+
+如果后续希望把项目从“可用工具”推进到“可验证的方法”，重点不是继续堆功能，而是建立**可复现 baseline、消融实验和教师人工评测**。只有出现稳定、可重复的提升，才适合声称准确率、召回率、成本或审稿效率有显著改善。
+
+#### 研究问题
+
+| 研究问题 | 想回答什么 |
+| --- | --- |
+| **RQ1 · Teacher Gate** | Evidence Gate + Teacher Gate 能否显著降低错误意见进入正式学生稿的比例？ |
+| **RQ2 · Agentic 全文审阅** | 结构驱动的 Agent 阅读是否比单次全文 Prompt / 固定逐章 Workflow 找到更多真正有价值的问题？ |
+| **RQ3 · 历史复查** | 字符串、n-gram、embedding、hybrid retrieval + Agent 上下文确认，哪种方案能更好识别“真复犯”同时降低误报？ |
+| **RQ4 · Teacher Feedback** | 老师历史软参考是否能提高老师采用率、减少改写量，同时不放大模型偏见或历史错误？ |
+
+#### 建议 baseline
+
+至少保留这些对照，避免最后只有“新版本 vs 旧版本”的自我比较：
+
+```text
+B0  单次全文 LLM Prompt
+B1  固定逐章 Workflow
+B2  当前 bounded Agent（outline / read / find）
+B3  B2 + Evidence Gate
+B4  B3 + Teacher Gate
+B5  后续 coverage-aware / history-aware / teacher-aware 方案
+```
+
+#### 核心指标
+
+| 指标 | 含义 |
+| --- | --- |
+| Finding Precision | AI 报出的候选里，有多少被老师判断为真实且有价值 |
+| Critical Issue Recall | 老师认为重要的问题里，AI 找到了多少 |
+| Teacher Acceptance Rate | `(accepted + edited_accepted) / AI candidates` |
+| Edited Acceptance Rate | 有多少意见需要老师改写后才能采用 |
+| False Positive / Rejection Rate | 明显误报、无价值或错误建议的比例 |
+| Final-doc Leakage | 未确认 / 已驳回意见进入正式 Word 的比例；Teacher Gate 目标应为 0 |
+| Chapter Coverage | 每章是否被实际读取 / 检查，以及覆盖深度 |
+| History Recall@K / Recidivism Precision | 历史召回是否既能找到相关旧问题，又避免把“相似”误判为“复犯” |
+| Review Time Saved | 老师完成第一轮审稿实际节省的时间 |
+| Token / Latency Cost | 每篇论文的模型 token、调用次数和总耗时 |
+
+#### 优化方向与消融顺序
+
+后续每次最好只改一个主要变量，再和固定 baseline 比较：
+
+1. **Coverage Planner**：先保证每章至少完成一次有效检查，再把剩余预算投入方法、实验、结果、结论等高风险章节。
+2. **动态 reasoning**：格式 / 简单语言走低成本路径；数据矛盾、方法—实验—结论关系等复杂问题按需提升 reasoning effort。
+3. **Hybrid History Retrieval**：比较字符串、字符 n-gram、embedding、hybrid retrieval，并保留 Agent 上下文确认。
+4. **Teacher Feedback Reranking**：拆分老师全局软参考与当前学生软参考，只使用最终有效决定作为主要信号。
+5. **Incremental Review / Cache**：多版本论文只重点重审变更段落，并复用章节 hash、embedding 或已验证证据，降低 token 与延迟。
+6. **Cross-section Consistency**：显式检查摘要—正文—结果—结论之间的数据、术语和主张是否一致。
+7. **受控外部检索**：仅对论文内部无法核验的事实联网，并单独评估外部检索带来的准确率收益、成本和噪声。
+
+#### 实验建议
+
+- 使用**获得授权**的真实论文和历史版本，不把真实论文提交到仓库。
+- 先从 20–50 篇建立小规模、可重复的内部 benchmark；有条件再扩大。
+- 让老师对 AI finding 做独立标注，尽量避免先看到模型答案后再定义“正确答案”。
+- 对关键问题建立人工 gold set，并保留严重程度等级。
+- 同一批论文做成 paired comparison，比较不同系统在相同输入上的表现。
+- 记录模型、prompt、工具预算、reasoning 配置、token、耗时和版本，保证结果可复现。
+- 做 ablation：去掉 coverage、去掉 history、去掉 teacher feedback、去掉 evidence gate，观察各模块到底贡献多少。
+
+#### 可能形成的研究贡献
+
+如果未来实验数据支持，可以围绕以下方向组织论文，而不是只写“做了一个软件”：
+
+1. **Teacher-Gated Agentic Review**：AI 只形成候选，程序证据门 + 教师决策门共同约束正式输出。
+2. **Longitudinal Review Memory**：利用学生历次稿件和老师最终决策，支持纵向复查而不是只审单篇文档。
+3. **Coverage-aware Long-document Review**：面向长论文的结构化阅读与动态预算，而不是一次性把全文塞进模型。
+4. **Human-centered Evaluation**：以老师采用率、重要问题召回、时间节省和最终稿错误泄漏为核心，而不是只看语言生成分数。
+
+> **研究目标和产品目标要分开。** 产品先保证老师能安全使用；研究再证明哪种设计真的提高 precision / recall / teacher acceptance，或者降低 token、延迟和审稿时间。没有真实实验数据前，不提前宣称“准确率提高很多”。
+
 ---
 
 ## 本地开发
