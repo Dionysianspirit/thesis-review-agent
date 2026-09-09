@@ -33,6 +33,16 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     assert "LASTEXITCODE" in windows
     assert "smoke_packaged_demo.py" in windows
     assert "--dist" in windows
+    assert "Select-Object -Last 1" in windows
+    # Quoted PowerShell strings must stay ASCII so Windows parse cannot see a
+    # stray quote byte inside a UTF-8 Chinese path.
+    for index, line in enumerate(windows.splitlines(), start=1):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        assert line.count('"') % 2 == 0, f"unbalanced quotes on line {index}: {line}"
+        for chunk in line.split('"')[1::2]:
+            assert chunk.isascii(), f"non-ascii quoted string on line {index}: {chunk}"
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "build_windows.ps1" in workflow
     assert "windows-latest" in workflow

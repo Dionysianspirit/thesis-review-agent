@@ -41,15 +41,20 @@ Copy-Item -Path (Join-Path $Root "agent") -Destination $AgentOut -Recurse -Force
 
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
-& $Python (Join-Path $Root "scripts\rename_dist.py")
+# rename_dist.py prints the product exe path; do not put that Chinese path in a
+# PowerShell quoted string (encoding can unbalance quotes at parse time).
+$RenameOut = & $Python (Join-Path $Root "scripts\rename_dist.py")
 if ($LASTEXITCODE -ne 0) {
     throw "rename_dist.py failed with exit $LASTEXITCODE"
 }
-
-# Smoke the renamed teacher EXE: GUI assets, bundled Pi, worker TCP (the GUI/agent
-# path), then faux first-pass → teacher decisions → Word comments.
-$ProductDir = Join-Path $Root "dist\论文审改助手"
-& $Python (Join-Path $Root "scripts\smoke_packaged_demo.py") "--dist" $ProductDir
+$ProductExe = ($RenameOut | Select-Object -Last 1).ToString().Trim()
+if (-not (Test-Path $ProductExe)) {
+    throw "rename_dist.py did not print a product exe path"
+}
+$ProductDir = Split-Path -Parent $ProductExe
+Write-Output $ProductExe
+$Smoke = Join-Path $Root "scripts\smoke_packaged_demo.py"
+& $Python $Smoke --dist $ProductDir
 if ($LASTEXITCODE -ne 0) {
     throw "Frozen teacher EXE smoke failed with exit $LASTEXITCODE"
 }
