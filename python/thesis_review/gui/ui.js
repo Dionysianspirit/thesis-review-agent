@@ -529,7 +529,11 @@ async function doExport(allowPending) {
     return;
   }
   if (result.ok) {
-    log(result.warning || "已生成正式审稿稿件。", "ok");
+    await refresh();
+    const n = result.n_exported || 0;
+    const extra = result.warning || "";
+    log(`已生成正式审稿稿件，共写入 ${n} 条老师认可意见。${extra}`.trim(), "ok");
+    setStatus("正式稿已生成", "done");
     $("btn-open-doc").disabled = !result.reviewed_path;
     $("reviewed-path").textContent = result.reviewed_path || "";
     if (result.stats) renderExportStats(result.stats);
