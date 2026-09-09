@@ -68,15 +68,15 @@ def test_packager_teacher_gate_treats_zero_comments_before_as_success():
         raise AssertionError("expected comments_before>0 to fail")
 
 
-def test_readme_does_not_ship_v04_as_v06():
+def test_readme_points_teachers_at_v06_release():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "仍是 V0.4" in text
+    assert "仍是 V0.4" not in text
+    assert "latest 是 V0.6" in text
     assert "build_windows.ps1" in text
     assert "论文审改助手.exe" in text
-    # Latest GitHub Release is still V0.4; do not send teachers there as V0.6.
-    assert "](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)" not in text
-    assert "thesis-review-agent-windows" in text
-    assert "/actions" in text
+    # V0.6 is published as latest; send teachers to the Release, not V0.4.
+    assert "](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)" in text
+    assert "不要下载旧的 V0.4" in text
 
 
 def test_rename_dist_survives_windows_console_encoding():
