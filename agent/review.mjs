@@ -229,6 +229,11 @@ const DATA_LEFT = "准确率为 81%";
 const DATA_RIGHT = "准确率为 85%";
 const STATS_CLAIM = "根据国家统计局数据，2023 年相关产业规模已超过十万亿元。";
 
+// The worker's commit_review result is the only source of truth for where
+// findings were written; cfg paths can drift from it when tool params get
+// mangled in transit.
+let lastCommitResult = null;
+
 function makeTool(call, name, label, description, parameters, extra = {}) {
   return {
     name,
@@ -238,6 +243,7 @@ function makeTool(call, name, label, description, parameters, extra = {}) {
     executionMode: extra.executionMode || "sequential",
     async execute(_toolCallId, params) {
       const result = await call(name, params);
+      if (name === "commit_review") lastCommitResult = result;
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: result,
@@ -325,9 +331,9 @@ function allTools(call) {
       })),
       draft_id: Type.Optional(Type.String()),
     })),
-    makeTool(call, "commit_review", "结束初审", "保存候选意见。不会生成给学生的正式 Word。", Type.Object({
+    makeTool(call, "commit_review", "结束初审", "保存候选意见。不会生成给学生的正式 Word。无需参数，直接调用即可。", Type.Object({
       draft_id: Type.Optional(Type.String()),
-      output_dir: Type.String(),
+      output_dir: Type.Optional(Type.String()),
     }), { terminate: true }),
   ];
 }
@@ -631,10 +637,14 @@ async function main() {
   try {
     if (args.faux) await runFaux(cfg, worker.call);
     else await runLive(cfg, worker.call);
+    if (!lastCommitResult || !lastCommitResult.findings_path) {
+      throw new Error("agent finished without a successful commit_review");
+    }
     const committed = {
       ok: true,
-      reviewed_path: path.join(cfg.output_dir, `${cfg.draft_id}-reviewed.docx`),
-      findings_path: path.join(cfg.output_dir, `${cfg.draft_id}-findings.json`),
+      reviewed_path: lastCommitResult.reviewed_path,
+      findings_path: lastCommitResult.findings_path,
+      n_findings: lastCommitResult.n_findings,
     };
     process.stdout.write(`${JSON.stringify(committed)}\n`);
   } catch (error) {

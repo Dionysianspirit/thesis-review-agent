@@ -396,3 +396,35 @@ def test_worker_word_tools_are_blocked_by_teacher_gate(tmp_path: Path):
     committed = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
     comments = WordAdapter().extract_comments(WordAdapter().open_path(committed["reviewed_path"]))
     assert comments == []
+
+
+def test_worker_prefers_authoritative_draft_over_model_params(tmp_path: Path):
+    draft_id = "基于LDA的热点舆情分析——以赤峰“免费菜事件”为例（第1稿）"
+    out = tmp_path / "结果"
+    source = out / f"{draft_id}-source.docx"
+    out.mkdir(parents=True)
+    source.write_bytes(sample_new_draft())
+    worker = Worker(
+        home=tmp_path,
+        teacher_id="teacher-a",
+        student_id="zhou",
+        major="人工智能",
+        draft_id=draft_id,
+        draft_path=str(source),
+        review_dir=out,
+    )
+    # The model normalizes curly quotes to '"' when relaying paths; the worker
+    # must open the parent-provided file instead of the mangled param.
+    opened = worker.dispatch("open_draft", {"path": str(out / '以赤峰"免费菜事件"为例.docx')})
+    assert opened["n_paragraphs"] >= 3
+    worker.dispatch("run_checks", {"draft_id": "mangled"})
+    committed = worker.dispatch(
+        "commit_review",
+        {"draft_id": "以赤峰免费菜事件为例", "output_dir": str(tmp_path / "elsewhere")},
+    )
+    assert committed["findings_path"] == str(out / f"{draft_id}-findings.json")
+    assert Path(committed["findings_path"]).is_file()
+    assert not (tmp_path / "elsewhere").exists()
+    findings = json.loads(Path(committed["findings_path"]).read_text(encoding="utf-8"))
+    assert findings
+    assert all(item["draft_id"] == draft_id for item in findings)

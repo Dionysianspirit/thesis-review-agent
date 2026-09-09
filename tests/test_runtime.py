@@ -61,6 +61,8 @@ def test_run_pi_review_adds_live_worker_arg(tmp_path: Path, monkeypatch):
             "teacher_id": "teacher-a",
             "student_id": "zhou",
             "output_dir": str(out),
+            "draft_id": "以赤峰“免费菜事件”为例（第1稿）",
+            "draft_path": str(out / "以赤峰“免费菜事件”为例（第1稿）-source.docx"),
             "api_key": "sk-secret",
         }
     )
@@ -70,6 +72,11 @@ def test_run_pi_review_adds_live_worker_arg(tmp_path: Path, monkeypatch):
     assert Path(args[args.index("--live") + 1]) == out / "live"
     assert "api_key" not in dumped
     assert "sk-secret" not in json.dumps(dumped)
+    # The true draft identity travels out-of-band so the worker never trusts
+    # the model's transcription of it.
+    assert args[args.index("--draft-id") + 1] == "以赤峰“免费菜事件”为例（第1稿）"
+    assert args[args.index("--draft-path") + 1].endswith("-source.docx")
+    assert Path(args[args.index("--output-dir") + 1]) == out
 
 
 def test_run_pi_review_deletes_stale_worker_portfile(tmp_path: Path, monkeypatch):

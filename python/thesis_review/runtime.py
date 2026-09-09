@@ -97,6 +97,21 @@ def _with_session_arg(args: list[str], session_id: str) -> list[str]:
     return list(args) + ["--session", str(session_id)]
 
 
+def _with_draft_args(args: list[str], payload: dict) -> list[str]:
+    """Pass the true draft identity out-of-band so the worker never has to
+    trust the model's transcription of paths (which normalizes characters)."""
+    if "--draft-path" in args:
+        return list(args)
+    extra: list[str] = []
+    if payload.get("draft_id"):
+        extra += ["--draft-id", str(payload["draft_id"])]
+    if payload.get("draft_path"):
+        extra += ["--draft-path", str(payload["draft_path"])]
+    if payload.get("output_dir"):
+        extra += ["--output-dir", str(payload["output_dir"])]
+    return list(args) + extra
+
+
 def _with_live_arg(args: list[str], output_dir: str) -> list[str]:
     if "--live" in args:
         return list(args)
@@ -136,6 +151,7 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
         payload["worker_args"] = _default_worker_args(payload)
     payload["worker_args"] = _with_live_arg(payload["worker_args"], payload["output_dir"])
     payload["worker_args"] = _with_session_arg(payload["worker_args"], payload.get("session_id") or "")
+    payload["worker_args"] = _with_draft_args(payload["worker_args"], payload)
     request_path = Path(payload["output_dir"]) / "pi-request.json"
     request_path.parent.mkdir(parents=True, exist_ok=True)
     request_path.write_text(

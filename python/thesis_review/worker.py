@@ -77,6 +77,9 @@ class Worker:
         live: Path | None = None,
         session_id: str = "",
         searcher: WebSearcher | None = None,
+        draft_id: str = "",
+        draft_path: str = "",
+        review_dir: Path | str | None = None,
     ) -> None:
         self.home = Path(home)
         self.teacher_id = teacher_id
@@ -84,6 +87,13 @@ class Worker:
         self.major = major
         self.live = Path(live) if live else None
         self.session_id = session_id
+        # Authoritative draft identity passed out-of-band by the parent. The
+        # model relays these through tool params and normalizes characters
+        # (e.g. curly quotes -> '"', illegal in Windows filenames), so params
+        # are only a fallback when the parent did not supply the truth.
+        self.draft_id = str(draft_id or "")
+        self.draft_path = str(draft_path or "")
+        self.review_dir = Path(review_dir) if review_dir else None
         self.service = build_service(self.home)
         self.sessions = self.service.sessions
         self.searcher = searcher or WebSearcher()
@@ -150,8 +160,7 @@ class Worker:
         self.trace.append(entry)
 
     def _write_trace(self, params: dict) -> str:
-        output_dir = Path(params["output_dir"])
-        draft_id = str(params.get("draft_id") or "new")
+        output_dir, draft_id = self._commit_target(params)
         output_dir.mkdir(parents=True, exist_ok=True)
         trace_path = output_dir / f"{draft_id}-trace.json"
         payload = {
@@ -200,7 +209,9 @@ class Worker:
         return ""
 
     def op_open_draft(self, params: dict) -> dict:
-        if params.get("path"):
+        if self.draft_path:
+            data = Path(self.draft_path).read_bytes()
+        elif params.get("path"):
             data = Path(params["path"]).read_bytes()
         else:
             import base64
@@ -236,7 +247,7 @@ class Worker:
 
     def op_run_checks(self, params: dict) -> dict:
         opened = self._require_open()
-        draft_id = str(params.get("draft_id") or "new")
+        draft_id = self._draft_id(params)
         findings = check_language(self.adapter.list_paragraphs(opened), draft_id=draft_id)
         findings.extend(
             check_format(self.adapter.list_paragraphs(opened), self.adapter.list_tables(opened), draft_id=draft_id)
@@ -297,7 +308,7 @@ class Worker:
         self._require_open()
         issue_id = str(params.get("issue_id") or "").strip()
         new_quote = str(params.get("new_quote") or params.get("claim") or "").strip()
-        draft_id = str(params.get("draft_id") or "new")
+        draft_id = self._draft_id(params)
         if not new_quote:
             raise ReviewError("missing_quote", "缺少新稿原文，未写入候选。")
         issue = self._confirmed_issue(issue_id)
@@ -484,7 +495,7 @@ class Worker:
         evidence_quote = str(params.get("evidence_quote") or params.get("quote_b") or "").strip()
         problem = str(params.get("problem") or "").strip()
         rationale = str(params.get("rationale") or "").strip()
-        draft_id = str(params.get("draft_id") or "new")
+        draft_id = self._draft_id(params)
         section = str(params.get("section") or "").strip()
         suggested_action = str(params.get("suggested_action") or "").strip()
         if self.content_count >= MAX_CONTENT_FINDINGS:
@@ -578,8 +589,7 @@ class Worker:
 
     def op_commit_review(self, params: dict) -> dict:
         self._require_open()
-        output_dir = Path(params["output_dir"])
-        draft_id = str(params.get("draft_id") or "new")
+        output_dir, draft_id = self._commit_target(params)
         output_dir.mkdir(parents=True, exist_ok=True)
         source_path = output_dir / f"{draft_id}-source.docx"
         reviewed_path = output_dir / f"{draft_id}-reviewed.docx"
@@ -612,6 +622,19 @@ class Worker:
         if self.opened is None:
             raise ReviewError("not_open", "尚未打开稿件。")
         return self.opened
+
+    def _draft_id(self, params: dict) -> str:
+        """Authoritative draft id from the parent, else the model-supplied one."""
+        return self.draft_id or str(params.get("draft_id") or "new")
+
+    def _commit_target(self, params: dict) -> tuple[Path, str]:
+        draft_id = self._draft_id(params)
+        if self.review_dir is not None:
+            return self.review_dir, draft_id
+        raw_dir = str(params.get("output_dir") or "")
+        if not raw_dir:
+            raise ReviewError("invalid_params", "缺少输出目录，无法保存审改结果。")
+        return Path(raw_dir), draft_id
 
     def _paragraphs(self) -> list[ParagraphView]:
         return self.adapter.list_paragraphs(self._require_open())
@@ -790,6 +813,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--portfile", type=Path, default=None)
     parser.add_argument("--live", type=Path, default=None)
     parser.add_argument("--session", default="")
+    parser.add_argument("--draft-id", default="")
+    parser.add_argument("--draft-path", default="")
+    parser.add_argument("--output-dir", type=Path, default=None)
     args = parser.parse_args(argv)
     setup(args.home, kind="worker")
     write_run(
@@ -807,6 +833,9 @@ def main(argv: list[str] | None = None) -> int:
         major=args.major,
         live=args.live,
         session_id=args.session,
+        draft_id=args.draft_id,
+        draft_path=args.draft_path,
+        review_dir=args.output_dir,
     )
     if args.portfile is not None:
         _serve_tcp(worker, args.portfile)

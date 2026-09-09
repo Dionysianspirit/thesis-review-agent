@@ -139,3 +139,34 @@ def test_faux_supported_claim_abandons_without_argument(tmp_path: Path):
     )
     assert result.reviewed_path.is_file()
     assert all(item.source != "argument" for item in result.findings)
+
+
+def test_faux_curly_quote_draft_keeps_exact_file_names(tmp_path: Path):
+    """Regression for Chinese Windows: a draft whose filename contains curly
+    quotes must commit under the exact parent draft_id even when the model
+    mangles or drops those characters in tool params."""
+    from tests.helpers import sample_new_draft
+
+    draft_id = "基于LDA的热点舆情演化分析——以赤峰“免费菜事件”为例（第1稿）"
+    out = tmp_path / "out" / draft_id
+    source = tmp_path / f"{draft_id}.docx"
+    source.write_bytes(sample_new_draft())
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "thesis-review.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id=draft_id,
+        data=source.read_bytes(),
+        output_dir=out,
+        use_pi=True,
+        faux=True,
+    )
+    assert result.findings_path.name == f"{draft_id}-findings.json"
+    assert result.reviewed_path.name == f"{draft_id}-reviewed.docx"
+    assert result.findings_path.is_file()
+    assert result.reviewed_path.is_file()
+    assert not result.warning
