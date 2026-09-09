@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "thesis-review"
-version = "0.1.0"
-description = "本科毕业论文 Word 审改助手原型"
+version = "0.6.0"
+description = "本科毕业论文教师审稿助手"
 requires-python = ">=3.12"
 dependencies = [
     "python-docx==1.2.0",

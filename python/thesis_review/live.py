@@ -3,20 +3,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ALLOWED_EVENT_KEYS = frozenset({"op", "ok", "heading", "code"})
+ALLOWED_EVENT_KEYS = frozenset({"op", "ok", "heading", "code", "intent"})
 HEADING_LIMIT = 80
+INTENT_LIMIT = 120
 
 OP_ZH = {
     "open_draft": "正在打开稿件",
-    "list_outline": "正在看章节大纲",
+    "list_outline": "正在读取论文结构",
     "read_paragraphs": "正在读正文",
     "find_text": "正在检索原文",
     "run_checks": "正在核对语言和格式",
-    "get_history_candidates": "正在核对是否复犯",
-    "confirm_history_finding": "已写入一条历史复犯批注",
-    "record_argument_finding": "已写入一条论证批注",
-    "commit_review": "正在写出 Word 审改稿",
-    "done": "初筛完成",
+    "get_history_candidates": "正在复查该学生以前出现过的问题",
+    "semantic_history_candidates": "找到语义相似历史问题，正在确认是否真正复犯",
+    "confirm_history_finding": "已形成一条候选审稿意见",
+    "record_argument_finding": "已形成一条候选审稿意见",
+    "record_content_finding": "已形成一条候选审稿意见",
+    "record_external_finding": "已形成一条候选审稿意见",
+    "web_search": "正在核对外部数据来源",
+    "web_fetch": "正在阅读外部来源",
+    "get_teacher_feedback": "正在参考老师以往反馈",
+    "commit_review": "初审候选已保存，等待老师处理",
+    "done": "AI 初审完成，请老师处理候选意见",
+    "report_intent": "",
 }
 
 
@@ -33,7 +41,10 @@ def reset_live(directory: Path | None) -> None:
     (path / "findings.json").write_text("[]", encoding="utf-8")
 
 
-def chinese_message(op: str, heading: str = "", previous: str = "") -> str:
+def chinese_message(op: str, heading: str = "", previous: str = "", intent: str = "") -> str:
+    note = str(intent or "").strip()
+    if note:
+        return note
     if op == "read_section":
         title = str(heading or "").strip()
         if title:
@@ -41,6 +52,8 @@ def chinese_message(op: str, heading: str = "", previous: str = "") -> str:
         return "正在读章节"
     mapped = OP_ZH.get(op)
     if mapped is None:
+        return previous
+    if mapped == "":
         return previous
     return mapped
 
@@ -51,13 +64,16 @@ def append_event(directory: Path | None, event: dict) -> None:
     path = Path(directory)
     path.mkdir(parents=True, exist_ok=True)
     safe: dict = {}
-    if "op" in ALLOWED_EVENT_KEYS and "op" in event:
+    if "op" in event:
         safe["op"] = str(event.get("op") or "")
-    if "ok" in ALLOWED_EVENT_KEYS and "ok" in event:
+    if "ok" in event:
         safe["ok"] = bool(event.get("ok"))
     heading = str(event.get("heading") or "").strip()[:HEADING_LIMIT]
     if heading:
         safe["heading"] = heading
+    intent = str(event.get("intent") or "").strip()[:INTENT_LIMIT]
+    if intent:
+        safe["intent"] = intent
     if event.get("code"):
         safe["code"] = str(event.get("code"))
     with (path / "events.jsonl").open("a", encoding="utf-8") as handle:
@@ -109,7 +125,10 @@ def read_progress(directory: Path | None) -> dict:
     for event in events:
         op = str(event.get("op") or "")
         heading = str(event.get("heading") or "")
-        message = chinese_message(op, heading=heading, previous=message)
+        intent = str(event.get("intent") or "")
+        message = chinese_message(op, heading=heading, previous=message, intent=intent)
+        if op == "report_intent":
+            continue
         entry: dict = {"op": op, "ok": event.get("ok", True)}
         if heading:
             entry["heading"] = heading

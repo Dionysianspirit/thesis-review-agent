@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 ASCII_NAME = "ThesisReviewAgent"
 PRODUCT_NAME = "论文审改助手"
+
+
+def _print_path(path: Path) -> None:
+    text = str(path)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
 
 
 def main() -> None:
@@ -32,7 +41,7 @@ def main() -> None:
             child.unlink()
     if not product_exe.is_file():
         raise SystemExit(f"Missing product exe: {product_exe}")
-    print(product_exe)
+    _print_path(product_exe)
 
 
 if __name__ == "__main__":

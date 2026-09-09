@@ -19,6 +19,8 @@ class AppSettings:
     output_dir: str = ""
     last_reviewed_path: str = ""
     last_output_dir: str = ""
+    last_paper_path: str = ""
+    last_session_id: str = ""
 
 
 def settings_path(home: Path) -> Path:

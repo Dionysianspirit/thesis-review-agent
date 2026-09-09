@@ -1,4 +1,4 @@
-"""Offline review writes a commented copy and a labelled findings file."""
+"""Offline review writes a clean copy and labelled candidate findings until the teacher exports."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +7,7 @@ from docx import Document
 
 from tests.helpers import sample_history_v1, sample_new_draft, sample_overclaim_draft
 from thesis_review.history.store import HistoryStore
+from thesis_review.quality import summarize_quality
 from thesis_review.service import ThesisReviewService
 from thesis_review.settings import AppSettings
 from thesis_review.word.adapter import WordAdapter
@@ -42,15 +43,24 @@ def test_offline_review_labels_history_and_rule_findings(tmp_path: Path):
     assert "model" not in sources
     history_item = next(item for item in result.findings if item.source == "history")
     assert history_item.issue_id == subjective.id
+    assert "待老师判断" in history_item.problem
+    snippet = (subjective.problem or subjective.original_text or "").strip()[:8]
+    assert snippet in history_item.problem
+    assert "仍出现已确认的历史问题" not in history_item.problem
     assert any("避免主观评价" in evidence.text for evidence in history_item.evidence)
+    assert all(item.teacher_decision == "pending" for item in result.findings)
     assert result.reviewed_path.exists()
     assert result.findings_path.exists()
     Document(str(result.reviewed_path))
     opened = WordAdapter().open_path(result.reviewed_path)
     comments = WordAdapter().extract_comments(opened)
     texts = [comment.text for comment in comments]
-    assert any("历次" in text or "已指出" in text for text in texts)
-    assert any(comment.author == "审改助手" for comment in comments)
+    assert not any("历次" in text or "已指出" in text for text in texts)
+    assert not any(comment.author == "审改助手" for comment in comments)
+    quality = summarize_quality(result.findings, {})
+    assert quality["history_recall"] >= 1
+    assert quality["history_recidivism"] == 0
+    assert "api_key" not in quality
 
 
 def test_offline_review_has_no_argument_source(tmp_path: Path):

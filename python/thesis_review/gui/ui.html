@@ -2,17 +2,23 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>论文初筛助手</title>
+  <title>论文审稿助手</title>
   <link rel="stylesheet" href="ui.css">
 </head>
-<body>
+<body class="stage-prepare">
   <header class="site-header">
     <div class="wrap header-inner">
       <div class="brand">
-        <span class="brand-mark serif">论文初筛助手</span>
-        <span class="brand-latin mono">THESIS&nbsp;PRESCREEN</span>
+        <span class="brand-mark serif">论文审稿助手</span>
+        <span class="brand-latin mono">TEACHER&nbsp;REVIEW</span>
       </div>
       <div class="header-actions">
+        <nav class="stage-nav" id="stage-nav" aria-label="审稿阶段">
+          <button class="stage-nav-item active" data-stage="prepare" type="button">01 准备</button>
+          <button class="stage-nav-item" data-stage="reviewing" type="button" disabled>02 初审</button>
+          <button class="stage-nav-item" data-stage="decide" type="button">03 决定</button>
+          <button class="stage-nav-item" data-stage="export" type="button">04 导出</button>
+        </nav>
         <span class="status-pill" id="status-pill">
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">准备就绪</span>
@@ -23,18 +29,18 @@
   </header>
 
   <main class="wrap">
-    <section class="hero">
-      <p class="eyebrow mono">本科毕业论文 · 前置预检 · 本机运行</p>
-      <h1 class="serif">先扫一遍，<br>再细看。</h1>
-      <p class="lede">按学校格式条款、语言规则和已确认的历史问题，先把稿件扫一遍，把批注和修订写进 Word 副本。老师仍在 Word 里决定接受或拒绝；学生也可以在交稿前自己先跑一遍。</p>
-      <p class="hero-note mono">PRESCREEN ONLY — 没有命中，不代表全文没有问题。</p>
+    <section class="hero" id="sec-hero">
+      <p class="eyebrow mono">本科毕业论文 · 教师审稿工作台 · 本机运行</p>
+      <h1 class="serif">AI 先初审，<br>老师再决定。</h1>
+      <p class="lede">老师在本机选择学生 Word，由 AI 完成第一轮格式、语言、内容、历史问题和必要的外部核验。候选意见需老师确认、编辑或驳回后，才会写入给学生的正式审稿稿。</p>
+      <p class="hero-note mono">AI IS NOT THE FINAL JUDGE — 没有命中，不代表全文没有问题。</p>
     </section>
 
-    <section class="block" id="sec-input">
+    <section class="block" id="sec-prepare">
       <div class="section-head">
-        <span class="section-index mono">01 / 稿件与身份</span>
-        <h2 class="serif">把稿件放进来。</h2>
-        <p class="section-aside">身份决定历史问题归属于哪位老师、哪名学生。未确认的历史问题，永远不会写成「再次犯错」。</p>
+        <span class="section-index mono">01 / 稿件准备</span>
+        <h2 class="serif">准备这次审稿。</h2>
+        <p class="section-aside">先确认老师、学生和当前新稿。历史稿只是辅助复查材料，不是主线。</p>
       </div>
 
       <div class="card identity">
@@ -50,109 +56,134 @@
         <button class="btn btn-ghost" id="btn-save-identity" type="button">保存身份</button>
       </div>
 
-      <div class="steps">
-        <article class="card step">
+      <div class="card start-card">
+        <div class="start-copy">
+          <span class="step-no mono">当前新稿</span>
+          <h3 class="serif">开始 AI 初审</h3>
+          <p>选择学生交来的 Word。AI 会自主阅读并给出候选审稿意见，不会直接写进正式学生稿。</p>
+          <p class="path-line mono" id="paper-path">尚未选择当前新稿</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-ghost" id="btn-choose-paper" type="button">选择当前新稿</button>
+          <button class="btn btn-dark" id="btn-review" type="button">开始 AI 初审</button>
+          <button class="btn btn-ghost" id="btn-demo" type="button">载入演示稿</button>
+        </div>
+      </div>
+
+      <div class="prep-grid">
+        <article class="card step muted-card">
           <div class="step-top">
-            <span class="step-no mono">STEP 1</span>
-            <h3 class="serif">导入历史稿</h3>
+            <span class="step-no mono">辅助</span>
+            <h3 class="serif">历史稿</h3>
           </div>
-          <p>选择带老师批注或修订的 Word 历史稿，可以一次多选。批注和修订会被整理成候选历史问题。</p>
+          <p>导入带老师批注或修订的旧稿，用于学生历史强复查。程序重启后记录仍在；原文件被移动时会提示，已提取的问题不会丢失。</p>
           <div class="row">
-            <button class="btn btn-dark" id="btn-ingest" type="button">选择历史稿</button>
-            <button class="btn btn-ghost" id="btn-demo" type="button">载入演示稿</button>
+            <button class="btn btn-ghost" id="btn-ingest" type="button">导入历史稿</button>
           </div>
+          <div id="history-drafts" class="draft-list empty">还没有已保存的历史稿记录。</div>
         </article>
 
         <article class="card step">
           <div class="step-top">
-            <span class="step-no mono">STEP 2</span>
+            <span class="step-no mono">复查清单</span>
             <h3 class="serif">确认历史问题</h3>
           </div>
-          <p>勾选后才会在新稿中复查。列表显示的是规则整理出的问题摘要，不是模型归纳。</p>
-          <div id="issues" class="issues empty">还没有历史问题。先导入历史稿，或载入演示稿。</div>
+          <p>勾选后才会作为学生级强复查对象。未确认的问题不会写成复犯。</p>
+          <div id="issues" class="issues empty">还没有历史问题。需要时再导入历史稿。</div>
         </article>
 
         <article class="card step">
           <div class="step-top">
-            <span class="step-no mono">STEP 3</span>
-            <h3 class="serif">初筛新稿</h3>
+            <span class="step-no mono">最近</span>
+            <h3 class="serif">审稿会话</h3>
           </div>
-          <p>选择学生的新稿开始初筛。窗口会用中文显示正在做什么，命中会一条条出现。离线时走格式、语言规则和历史字符串复查；配置密钥后，由模型确认复犯并核对关键主张的证据。</p>
-          <div class="row">
-            <button class="btn btn-dark" id="btn-review" type="button">选择新稿并初筛</button>
-          </div>
+          <p>关闭程序后可恢复未完成的 Review Session，候选意见和老师决定都会保留。</p>
+          <div id="sessions" class="session-list empty">还没有审稿会话。</div>
         </article>
       </div>
     </section>
 
-    <section class="block" id="sec-results">
+    <section class="block" id="sec-live">
       <div class="section-head">
-        <span class="section-index mono">02 / 初筛结果</span>
-        <h2 class="serif">命中、依据、写入位置。</h2>
-        <p class="section-aside">只呈现规则结果：命中了什么，没命中什么，依据是什么。哪些问题被跳过、哪些被确认，都摆在明处。</p>
+        <span class="section-index mono">02 / AI 正在初审</span>
+        <h2 class="serif" id="live-title">等待开始。</h2>
+        <p class="section-aside">面向老师的中文状态会持续更新。技术日志默认折叠。</p>
+      </div>
+      <div class="card live-card">
+        <p class="live-kicker mono" id="live-kicker">IDLE</p>
+        <p class="live-message serif" id="log">准备就绪。请选择当前新稿并开始 AI 初审。</p>
+        <details class="tech-log" id="tech-log">
+          <summary>技术日志</summary>
+          <pre id="tech-log-body" class="log mono">暂无。</pre>
+        </details>
+      </div>
+    </section>
+
+    <section class="block" id="sec-decide">
+      <div class="section-head">
+        <span class="section-index mono">03 / 老师处理候选意见</span>
+        <h2 class="serif">先处理待办，再谈类型。</h2>
+        <p class="section-aside">每条候选都经过 Evidence Gate。确认、编辑后确认或驳回会立即保存。只有老师认可的意见进入正式 Word。</p>
       </div>
 
       <div id="results-empty" class="card placeholder">
-        还没有初筛结果。完成一次新稿初筛后，这里会按来源分组列出每条命中与依据。
+        还没有候选意见。开始 AI 初审后，通过校验的意见会一条条出现在这里。
       </div>
 
       <div id="results" hidden>
         <div class="summary card">
           <div class="summary-counts">
-            <div class="count"><strong class="serif" id="count-all">0</strong><span class="mono">命中总数</span></div>
-            <div class="count"><strong class="serif" id="count-language">0</strong><span class="mono">语言规则</span></div>
-            <div class="count"><strong class="serif" id="count-format">0</strong><span class="mono">格式规则</span></div>
-            <div class="count"><strong class="serif" id="count-history">0</strong><span class="mono">历史复犯</span></div>
-            <div class="count"><strong class="serif" id="count-argument">0</strong><span class="mono">论证取证</span></div>
-            <div class="count muted"><strong class="serif" id="count-skipped">0</strong><span class="mono">未写入</span></div>
+            <div class="count"><strong class="serif" id="count-pending">0</strong><span class="mono">待处理</span></div>
+            <div class="count"><strong class="serif" id="count-accepted">0</strong><span class="mono">已确认</span></div>
+            <div class="count"><strong class="serif" id="count-edited">0</strong><span class="mono">已修改确认</span></div>
+            <div class="count"><strong class="serif" id="count-rejected">0</strong><span class="mono">已驳回</span></div>
+            <div class="count muted"><strong class="serif" id="count-all">0</strong><span class="mono">AI 候选</span></div>
           </div>
           <div class="summary-side">
             <span class="mode-badge mono" id="mode-badge">离线规则</span>
             <span class="recall-line mono" id="recall-line"></span>
+            <button class="btn btn-ghost" id="btn-accept-format" type="button">批量接受格式问题</button>
           </div>
         </div>
 
         <div id="warning-banner" class="warning" hidden></div>
 
-        <div class="tabs mono" id="tabs">
-          <button class="tab active" data-tab="all" type="button">全部</button>
-          <button class="tab" data-tab="language" type="button">语言规则</button>
-          <button class="tab" data-tab="format" type="button">格式规则</button>
-          <button class="tab" data-tab="history" type="button">历史复犯</button>
-          <button class="tab" data-tab="argument" type="button">论证取证</button>
-          <button class="tab" data-tab="skipped" type="button">未写入</button>
+        <div class="tabs mono" id="decision-tabs">
+          <button class="tab active" data-decision="pending" type="button">待处理</button>
+          <button class="tab" data-decision="accepted" type="button">已确认</button>
+          <button class="tab" data-decision="edited_accepted" type="button">已修改</button>
+          <button class="tab" data-decision="rejected" type="button">已驳回</button>
+        </div>
+        <div class="tabs mono type-tabs" id="type-tabs">
+          <button class="tab active" data-kind="all" type="button">全部</button>
+          <button class="tab" data-kind="format" type="button">格式</button>
+          <button class="tab" data-kind="language" type="button">语言</button>
+          <button class="tab" data-kind="content" type="button">内容</button>
+          <button class="tab" data-kind="history" type="button">历史</button>
+          <button class="tab" data-kind="external" type="button">外部核验</button>
         </div>
 
         <div id="findings" class="findings"></div>
-
-        <p class="honesty">本次初筛只覆盖已确认的规则与历史问题。没有命中，不代表全文没有问题；所有批注与修订仍需老师在 Word 中逐条确认。</p>
+        <p class="honesty">AI 不是最终裁判。正式稿只包含老师确认或编辑后确认的意见；待处理和驳回都不会写给学生。</p>
       </div>
     </section>
 
     <section class="block" id="sec-export">
       <div class="section-head">
-        <span class="section-index mono">03 / 导出</span>
-        <h2 class="serif">在 Word 里收尾。</h2>
-        <p class="section-aside">审改副本带批注与修订，老师在 Word 中逐条接受或拒绝。findings.json 留存本次初筛的结构化结果。</p>
+        <span class="section-index mono">04 / 正式输出</span>
+        <h2 class="serif">生成给学生的审稿稿。</h2>
+        <p class="section-aside">正式 Word 只写入已确认和编辑后确认的意见。若仍有待处理项，会明确提示，不会静默忽略。</p>
       </div>
       <div class="card export">
+        <div class="export-stats mono" id="export-stats">AI 候选：0　老师确认：0　编辑后确认：0　驳回：0　未处理：0　正式采用：0</div>
         <div class="row">
-          <button class="btn btn-dark" id="btn-open-doc" type="button" disabled>用 Word 打开审改稿</button>
+          <button class="btn btn-dark" id="btn-export" type="button" disabled>生成正式审稿稿件</button>
+          <button class="btn btn-ghost" id="btn-export-confirmed" type="button" disabled>仅使用当前已确认意见生成</button>
+          <button class="btn btn-ghost" id="btn-open-doc" type="button" disabled>用 Word 打开正式稿</button>
           <button class="btn btn-ghost" id="btn-open-folder" type="button" disabled>打开结果文件夹</button>
         </div>
         <p class="path-line mono" id="reviewed-path"></p>
       </div>
-    </section>
-
-    <section class="block log-block">
-      <div class="section-head">
-        <span class="section-index mono">LOG / 进度</span>
-      </div>
-      <pre id="log" class="log mono">准备就绪。请先保存老师与学生身份。</pre>
-      <details class="tech-log" id="tech-log">
-        <summary>技术日志</summary>
-        <pre id="tech-log-body" class="log mono">暂无。</pre>
-      </details>
     </section>
   </main>
 
@@ -169,9 +200,9 @@
       <label>API Base URL
         <input id="base-url" type="text" placeholder="https://api.openai.com/v1">
       </label>
-          <label>API Key
-            <input id="api-key" type="password" placeholder="未保存，离线初筛" autocomplete="off">
-          </label>
+      <label>API Key
+        <input id="api-key" type="password" placeholder="未保存，离线初审" autocomplete="off">
+      </label>
       <div class="row">
         <button class="btn btn-dark" id="btn-save-settings" type="button">保存</button>
         <button class="btn btn-ghost" id="btn-close-settings" type="button">关闭</button>

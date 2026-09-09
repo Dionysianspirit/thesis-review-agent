@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python package
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+      - name: Fetch DocxEngine
+        run: python scripts/fetch_docxengine.py
+      - name: Install agent
+        working-directory: agent
+        run: npm ci --omit=dev
+      - name: Pytest
+        run: python -m pytest tests -q
+
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build teacher EXE
+        run: powershell -File scripts/build_windows.ps1
+      - name: Upload onedir package
+        uses: actions/upload-artifact@v4
+        with:
+          name: thesis-review-agent-windows
+          path: dist/论文审改助手
+          if-no-files-found: error

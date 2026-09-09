@@ -29,6 +29,7 @@ def check_language(paragraphs: list[ParagraphView], *, draft_id: str = "") -> li
                     anchor=paragraph.anchor,
                     paragraph_index=paragraph.ordinal,
                     apply="both",
+                    kind="language",
                     suggested_old=old,
                     suggested_new=new,
                     draft_id=draft_id,

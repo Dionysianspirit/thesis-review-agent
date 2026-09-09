@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from thesis_review.fixtures import write_demo_drafts
+from thesis_review.demo import run_teacher_demo
 from thesis_review.history.store import HistoryStore
 from thesis_review.paths import app_home
 from thesis_review.service import ThesisReviewService
@@ -47,8 +47,18 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--out", type=Path, required=True)
     review.add_argument("docx", type=Path, nargs="?")
 
-    demo = sub.add_parser("demo", help="用内置模拟稿跑通离线审查")
+    demo = sub.add_parser("demo", help="用内置模拟稿跑通老师确认门：初审候选 → 老师决定 → 正式 Word 批注")
     demo.add_argument("--out", type=Path, required=True)
+    demo.add_argument(
+        "--faux",
+        action="store_true",
+        help="经 Pi Agent 与 worker TCP 做第一轮初审（打包冒烟用，不回退离线规则）",
+    )
+
+    export = sub.add_parser("export", help="将老师已确认意见写入正式 Word")
+    export.add_argument("--session", required=True, help="Review Session id")
+    export.add_argument("--out", type=Path, default=None, help="正式稿路径或目录")
+    export.add_argument("--allow-pending", action="store_true", help="忽略未处理项，只写入已确认意见")
 
     evaluate = sub.add_parser("eval", help="用本机密钥跑真实模型金标（不进 CI）")
     evaluate.add_argument("--out", type=Path, required=True)
@@ -90,27 +100,27 @@ def main(argv: list[str] | None = None) -> int:
         print(result.findings_path)
         return 0
     if args.command == "demo":
-        drafts = write_demo_drafts(args.out / "demo-drafts")
-        candidates = service.ingest_history(
-            teacher_id="teacher-a",
-            student_id="zhou",
-            major="人工智能",
-            draft_id="v1",
-            data=drafts["v1"].read_bytes(),
-        )
-        for item in candidates:
-            service.confirm_issue(teacher_id="teacher-a", student_id="zhou", issue_id=item.id)
-        result = service.review(
-            teacher_id="teacher-a",
-            student_id="zhou",
-            draft_id="new",
-            data=drafts["new"].read_bytes(),
-            output_dir=args.out,
-            use_model=False,
-        )
-        print(result.reviewed_path)
-        print(result.findings_path)
+        payload = run_teacher_demo(service, args.out, faux=bool(args.faux))
+        print(payload["reviewed_path"])
+        print(payload["findings_path"])
+        print(payload["gate_path"])
+        if not payload.get("ok"):
+            print(payload.get("error") or "teacher-gate demo failed", file=sys.stderr)
+            return 1
         return 0
+    if args.command == "export":
+        dest = args.out
+        if dest is not None and dest.suffix.lower() != ".docx":
+            dest.mkdir(parents=True, exist_ok=True)
+            session = service.sessions.get(args.session)
+            dest = dest / f"{session.draft_id}-reviewed.docx"
+        result = service.export_final(
+            session_id=args.session,
+            allow_pending=args.allow_pending,
+            dest=dest,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
     if args.command == "eval":
         from thesis_review.evalrun import run_eval_command
 

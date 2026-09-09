@@ -82,6 +82,8 @@ def test_offline_review_still_writes_history_without_a_key(tmp_path: Path):
     sources = {item.source for item in result.findings}
     assert "history" in sources
     assert "model" not in sources
+    history_item = next(item for item in result.findings if item.source == "history")
+    assert "待老师判断" in history_item.problem
 
 
 def test_string_recall_still_hits_unchanged_heading(tmp_path: Path):

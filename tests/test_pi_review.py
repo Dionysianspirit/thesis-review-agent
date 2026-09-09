@@ -13,6 +13,7 @@ from tests.helpers import (
     sample_supported_claim_draft,
 )
 from thesis_review.history.store import HistoryStore
+from thesis_review.quality import summarize_quality
 from thesis_review.service import ThesisReviewService
 from thesis_review.word.adapter import WordAdapter
 
@@ -46,6 +47,12 @@ def test_faux_pi_review_writes_history_and_rule_findings(tmp_path: Path):
     assert "history" in sources
     assert "argument" not in sources
     assert result.reviewed_path.is_file()
+    history_item = next(item for item in result.findings if item.source == "history")
+    assert "仍出现已确认的历史问题" in history_item.problem
+    quality = summarize_quality(result.findings, {})
+    assert quality["history_recidivism"] >= 1
+    comments = WordAdapter().extract_comments(WordAdapter().open_path(result.reviewed_path))
+    assert comments == []
 
 
 def test_faux_overclaim_records_argument_finding(tmp_path: Path):
@@ -70,8 +77,8 @@ def test_faux_overclaim_records_argument_finding(tmp_path: Path):
     assert all(item.code == "claim_without_evidence" for item in argument)
     comments = WordAdapter().extract_comments(WordAdapter().open_path(result.reviewed_path))
     blob = "\n".join(item.text for item in comments)
-    assert OVERCLAIM_CLAIM_QUOTE in blob
-    assert OVERCLAIM_EVIDENCE_QUOTE in blob
+    assert OVERCLAIM_CLAIM_QUOTE not in blob
+    assert OVERCLAIM_EVIDENCE_QUOTE not in blob
     trace_path = result.findings_path.with_name("overclaim-trace.json")
     assert trace_path.is_file()
     ops = [item["op"] for item in json.loads(trace_path.read_text(encoding="utf-8"))["ops"]]

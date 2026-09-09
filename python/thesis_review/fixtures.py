@@ -105,6 +105,57 @@ def _new_draft() -> bytes:
     return _save(doc)
 
 
+FULL_ABSTRACT_RATE = "准确率为 81%"
+FULL_CONCLUSION_RATE = "准确率为 85%"
+FULL_OVERCLAIM = "实验结果表明该方法显著提升了分类准确率。"
+FULL_SUPPORTED = "在公开数据集上，准确率为 0.91，基线模型为 0.72，配对检验 p<0.01，该对比有统计依据。"
+FULL_STATS = "根据国家统计局数据，2023 年相关产业规模已超过十万亿元。"
+FULL_METHOD_GAP = "本文使用卷积神经网络完成分类。"
+FULL_HISTORY_SPAN = "非常非常有效"
+
+
+def full_thesis_draft() -> bytes:
+    """Synthetic undergraduate thesis: long enough for a first-pass review, with planted issues."""
+    doc = Document()
+    doc.add_paragraph("大连财经学院本科毕业论文")
+    doc.add_paragraph("摘要")
+    doc.add_paragraph(
+        "本文研究一种用于图像分类的卷积神经网络方法。在测试集上，"
+        f"{FULL_ABSTRACT_RATE}。该方法非常非常有效，能够满足毕业设计要求。"
+    )
+    doc.add_paragraph("关键词：图像分类；卷积神经网络；准确率")
+    doc.add_paragraph("Abstract")
+    doc.add_paragraph("This paper studies a convolutional neural network for image classification.")
+    doc.add_paragraph("1 引言")
+    doc.add_paragraph("图像分类是计算机视觉的基础任务。本文提出一种改进卷积网络，并在后文给出实验。")
+    doc.add_paragraph("前文将说明数据集划分、训练设置与评价指标，后文应给出对应实验细节。")
+    doc.add_paragraph("2 方法")
+    doc.add_paragraph(FULL_METHOD_GAP)
+    doc.add_paragraph("网络包含卷积层与全连接层。本节未说明学习率、训练轮次、数据增强与划分比例。")
+    doc.add_paragraph("3 实验")
+    doc.add_paragraph("实验在自建数据集上进行。对照设置仅给出本文模型，未报告基线模型训练细节。")
+    doc.add_paragraph("表 1 主要结果")
+    table = doc.add_table(rows=3, cols=2)
+    table.cell(0, 0).text = "模型"
+    table.cell(0, 1).text = "准确率"
+    table.cell(1, 0).text = "本文方法"
+    table.cell(1, 1).text = "81%"
+    table.cell(2, 0).text = "基线"
+    table.cell(2, 1).text = "—"
+    doc.add_paragraph("4 实验结果")
+    doc.add_paragraph(f"在测试集上，{FULL_ABSTRACT_RATE}。未报告显著性检验。")
+    doc.add_paragraph(FULL_SUPPORTED)
+    doc.add_paragraph("5 结论")
+    doc.add_paragraph(f"{FULL_OVERCLAIM}同时，{FULL_CONCLUSION_RATE}。")
+    doc.add_paragraph(FULL_STATS)
+    doc.add_paragraph("6 参考文献")
+    doc.add_paragraph("[1] 张三. 示例文献. 期刊, 2024.")
+    doc.add_paragraph("[2] 李四. 另一篇文献. 期刊, 2025.")
+    doc.add_paragraph("致谢")
+    doc.add_paragraph("感谢指导教师的修改意见。")
+    return _save(doc)
+
+
 def _save(doc: Document) -> bytes:
     buffer = io.BytesIO()
     doc.save(buffer)

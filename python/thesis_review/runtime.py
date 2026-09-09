@@ -53,10 +53,15 @@ def agent_entry() -> Path:
 
 
 def python_path() -> str:
+    if getattr(sys, "frozen", False):
+        return str(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
     return str(repo_root() / "python")
 
 
 def _default_worker_args(payload: dict) -> list[str]:
+    extra = []
+    if payload.get("session_id"):
+        extra = ["--session", str(payload["session_id"])]
     if getattr(sys, "frozen", False):
         return [
             "worker",
@@ -68,6 +73,7 @@ def _default_worker_args(payload: dict) -> list[str]:
             payload["student_id"],
             "--major",
             payload.get("major") or "人工智能",
+            *extra,
         ]
     return [
         "-m",
@@ -80,7 +86,14 @@ def _default_worker_args(payload: dict) -> list[str]:
         payload["student_id"],
         "--major",
         payload.get("major") or "人工智能",
+        *extra,
     ]
+
+
+def _with_session_arg(args: list[str], session_id: str) -> list[str]:
+    if not session_id or "--session" in args:
+        return list(args)
+    return list(args) + ["--session", str(session_id)]
 
 
 def _with_live_arg(args: list[str], output_dir: str) -> list[str]:
@@ -120,6 +133,7 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
     if "worker_args" not in payload:
         payload["worker_args"] = _default_worker_args(payload)
     payload["worker_args"] = _with_live_arg(payload["worker_args"], payload["output_dir"])
+    payload["worker_args"] = _with_session_arg(payload["worker_args"], payload.get("session_id") or "")
     request_path = Path(payload["output_dir"]) / "pi-request.json"
     request_path.parent.mkdir(parents=True, exist_ok=True)
     request_path.write_text(

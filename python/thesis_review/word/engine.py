@@ -7,6 +7,12 @@ from thesis_review.paths import vendor_src
 
 
 def ensure_engine() -> None:
+    # DocxEngine is vendored onto sys.path at runtime. Name the stdlib modules it
+    # imports so a frozen EXE still includes them after PyInstaller analysis.
+    import unicodedata  # noqa: F401
+    import xml.etree.ElementTree as ET  # noqa: F401
+    import zipfile  # noqa: F401
+
     src = vendor_src()
     if not (src / "docxengine" / "__init__.py").is_file() and not (src / "__init__.py").is_file():
         raise ReviewError(

@@ -101,3 +101,96 @@ def test_run_pi_review_writes_redacted_request_and_honors_timeout(tmp_path: Path
     assert "api_key" not in json.loads(dumped)
     assert captured["timeout"] == 600
     assert captured["env"]["THESIS_API_KEY"] == "sk-secret"
+
+
+def test_frozen_worker_args_use_exe_worker_subcommand(monkeypatch):
+    import sys
+
+    from thesis_review.runtime import _default_worker_args
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    args = _default_worker_args(
+        {
+            "home": "/appdata/home",
+            "teacher_id": "teacher-a",
+            "student_id": "zhou",
+            "major": "人工智能",
+            "session_id": "sess-1",
+        }
+    )
+    assert args[0] == "worker"
+    assert "-m" not in args
+    assert args[args.index("--home") + 1] == "/appdata/home"
+    assert "--session" in args
+    assert args[args.index("--session") + 1] == "sess-1"
+
+
+def test_python_path_uses_meipass_when_frozen(monkeypatch, tmp_path: Path):
+    import sys
+
+    import thesis_review.runtime as runtime
+
+    mei = tmp_path / "MEI123"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(mei), raising=False)
+    assert runtime.python_path() == str(mei)
+
+
+def test_gui_app_worker_tcp_blocks_direct_word_writes(tmp_path: Path):
+    import json
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    portfile = tmp_path / "worker.port"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "thesis_review.gui.app",
+            "worker",
+            "--home",
+            str(tmp_path),
+            "--teacher",
+            "teacher-a",
+            "--student",
+            "zhou",
+            "--portfile",
+            str(portfile),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if portfile.is_file() and portfile.read_text(encoding="ascii").strip().isdigit():
+                break
+            if proc.poll() is not None:
+                raise AssertionError(proc.stderr.read() if proc.stderr else "worker exited")
+            time.sleep(0.05)
+        else:
+            raise AssertionError("worker did not write portfile")
+        port = int(portfile.read_text(encoding="ascii").strip())
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(
+                (json.dumps({"id": 1, "op": "add_comment", "params": {"text": "no"}}) + "\n").encode()
+            )
+            buf = b""
+            while b"\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+        line = json.loads(buf.decode().strip().splitlines()[-1])
+        assert (line.get("error") or {}).get("code") == "teacher_gate"
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)

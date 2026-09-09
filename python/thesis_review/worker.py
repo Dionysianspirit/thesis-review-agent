@@ -4,28 +4,53 @@ import argparse
 import json
 import socket
 import sys
+import uuid
 from pathlib import Path
 
 from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.cli import build_service
 from thesis_review.errors import ReviewError
-from thesis_review.live import append_event, reset_live, write_findings
 from thesis_review.history.match import HEADING_RE, match_issue, normalize
-from thesis_review.service import ASSISTANT_AUTHOR, _comment_body, _history_finding
-from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ParagraphView
+from thesis_review.history.semantic import semantic_recall
+from thesis_review.live import append_event, reset_live, write_findings
+from thesis_review.quality import GATE_FAIL_CODES
+from thesis_review.session_store import feedback_as_soft_reference
+from thesis_review.service import _history_finding
+from thesis_review.types import (
+    CONTENT_SUBTYPES,
+    Evidence,
+    ExternalSource,
+    Finding,
+    HistoryHit,
+    IssueRecord,
+    ParagraphView,
+    prepare_candidate,
+)
+from thesis_review.web import WebSearcher
 from thesis_review.word.adapter import OpenedDocument, WordAdapter
 
 NAV_OPS = frozenset({"list_outline", "read_section", "read_paragraphs", "find_text"})
-LIVE_FINDING_OPS = frozenset({"run_checks", "confirm_history_finding", "record_argument_finding"})
-NAV_BUDGET = 12
-TRACE_PARAM_KEYS = frozenset({"start_ordinal", "limit", "max_hits", "draft_id", "issue_id"})
+LIVE_FINDING_OPS = frozenset(
+    {
+        "run_checks",
+        "confirm_history_finding",
+        "record_argument_finding",
+        "record_content_finding",
+        "record_external_finding",
+    }
+)
+NAV_BUDGET = 20
+SEARCH_BUDGET = 3
+TRACE_PARAM_KEYS = frozenset({"start_ordinal", "limit", "max_hits", "draft_id", "issue_id", "subtype", "kind"})
 MAX_READ_PARAS = 8
 MAX_READ_CHARS = 2000
-MAX_ARGUMENT_FINDINGS = 3
+MAX_CONTENT_FINDINGS = 10
+MAX_ARGUMENT_FINDINGS = MAX_CONTENT_FINDINGS
 MAX_FIND_HITS = 5
 OUTLINE_TEXT_LIMIT = 80
 FIND_CONTEXT = 40
+INTENT_LIMIT = 120
 NAMED_HEADINGS = (
     "摘要",
     "绪论",
@@ -49,26 +74,34 @@ class Worker:
         student_id: str,
         major: str,
         live: Path | None = None,
+        session_id: str = "",
+        searcher: WebSearcher | None = None,
     ) -> None:
         self.home = Path(home)
         self.teacher_id = teacher_id
         self.student_id = student_id
         self.major = major
         self.live = Path(live) if live else None
+        self.session_id = session_id
         self.service = build_service(self.home)
+        self.sessions = self.service.sessions
+        self.searcher = searcher or WebSearcher()
         self.adapter = WordAdapter()
         self.opened: OpenedDocument | None = None
         self.original: bytes = b""
         self.findings: list[Finding] = []
         self.nav_calls = 0
+        self.search_calls = 0
+        self.content_count = 0
         self.argument_count = 0
+        self.gate_rejects = 0
         self.trace: list[dict] = []
 
     def dispatch(self, op: str, params: dict) -> dict:
         try:
             if op in NAV_OPS:
                 if self.nav_calls >= NAV_BUDGET:
-                    raise ReviewError("nav_budget", "导航次数已达上限，只能记录论证发现或提交审改。")
+                    raise ReviewError("nav_budget", "导航次数已达上限，只能记录发现或提交审改。")
                 self.nav_calls += 1
             handler = getattr(self, f"op_{op}", None)
             if handler is None:
@@ -85,6 +118,8 @@ class Worker:
                 self._emit_live("done", {}, ok=True)
             return result
         except ReviewError as exc:
+            if exc.code in GATE_FAIL_CODES:
+                self.gate_rejects += 1
             self._record_trace(op, params, ok=False, code=exc.code)
             self._emit_live(op, params, ok=False, code=exc.code)
             raise
@@ -100,10 +135,14 @@ class Worker:
         draft_id = str(params.get("draft_id") or "new")
         output_dir.mkdir(parents=True, exist_ok=True)
         trace_path = output_dir / f"{draft_id}-trace.json"
-        trace_path.write_text(
-            json.dumps({"draft_id": draft_id, "ops": self.trace}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        payload = {
+            "draft_id": draft_id,
+            "session_id": self.session_id,
+            "ops": self.trace,
+            "gate_rejects": self.gate_rejects,
+            "search_calls": self.search_calls,
+        }
+        trace_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(trace_path)
 
     def _emit_live(self, op: str, params: dict, *, ok: bool, code: str = "") -> None:
@@ -111,12 +150,19 @@ class Worker:
         heading = self._live_heading(op, params)
         if heading:
             event["heading"] = heading
+        if op == "report_intent":
+            event["intent"] = str(params.get("message") or params.get("intent") or "").strip()[:INTENT_LIMIT]
         if code:
             event["code"] = code
         append_event(self.live, event)
 
     def _write_live_findings(self) -> None:
         write_findings(self.live, self.findings)
+        if self.session_id:
+            try:
+                self.sessions.replace_findings(self.session_id, self.findings)
+            except KeyError:
+                pass
 
     def _live_heading(self, op: str, params: dict) -> str:
         if op != "read_section" or "start_ordinal" not in params:
@@ -145,11 +191,20 @@ class Worker:
         self.opened = self.adapter.open_bytes(data)
         self.findings = []
         self.nav_calls = 0
+        self.search_calls = 0
+        self.content_count = 0
         self.argument_count = 0
+        self.gate_rejects = 0
         self.trace = []
         reset_live(self.live)
         paragraphs = self.adapter.list_paragraphs(self.opened)
         return {"n_paragraphs": len(paragraphs)}
+
+    def op_report_intent(self, params: dict) -> dict:
+        message = str(params.get("message") or params.get("intent") or "").strip()
+        if not message:
+            raise ReviewError("invalid_params", "缺少检查意图。")
+        return {"ok": True, "message": message[:INTENT_LIMIT]}
 
     def op_list_paragraphs(self, params: dict) -> dict:
         opened = self._require_open()
@@ -164,10 +219,12 @@ class Worker:
         opened = self._require_open()
         draft_id = str(params.get("draft_id") or "new")
         findings = check_language(self.adapter.list_paragraphs(opened), draft_id=draft_id)
-        findings.extend(check_format(self.adapter.list_paragraphs(opened), self.adapter.list_tables(opened), draft_id=draft_id))
-        self._apply(findings)
-        self.findings.extend(findings)
-        return {"findings": [item.to_dict() for item in findings]}
+        findings.extend(
+            check_format(self.adapter.list_paragraphs(opened), self.adapter.list_tables(opened), draft_id=draft_id)
+        )
+        prepared = [prepare_candidate(item, session_id=self.session_id) for item in findings]
+        self.findings.extend(prepared)
+        return {"findings": [item.to_dict() for item in prepared]}
 
     def op_get_history_candidates(self, params: dict) -> dict:
         self._require_open()
@@ -182,64 +239,111 @@ class Worker:
             candidates.append(_candidate_payload(hit, issue))
         return {"candidates": candidates}
 
+    def op_semantic_history_candidates(self, params: dict) -> dict:
+        self._require_open()
+        issues = self.service.store.list_issues(
+            teacher_id=self.teacher_id,
+            student_id=self.student_id,
+            status="confirmed",
+        )
+        hits = semantic_recall(issues, self._original_paragraphs())
+        return {
+            "candidates": [
+                {
+                    "issue_id": hit.issue_id,
+                    "new_quote": hit.new_quote,
+                    "new_anchor": hit.new_anchor,
+                    "paragraph_index": hit.paragraph_index,
+                    "score": round(hit.score, 4),
+                    "original_text": hit.original_text,
+                    "old_span": hit.original_span,
+                    "problem": hit.problem,
+                    "category": hit.category,
+                    "needs_context_check": True,
+                    "auto_recidivism": False,
+                }
+                for hit in hits
+            ]
+        }
+
+    def op_get_teacher_feedback(self, params: dict) -> dict:
+        items = self.sessions.list_feedback(
+            teacher_id=self.teacher_id,
+            student_id=self.student_id,
+            limit=int(params.get("limit") or 12),
+        )
+        return {"items": [feedback_as_soft_reference(item) for item in items]}
+
     def op_confirm_history_finding(self, params: dict) -> dict:
         self._require_open()
         issue_id = str(params.get("issue_id") or "").strip()
         new_quote = str(params.get("new_quote") or params.get("claim") or "").strip()
         draft_id = str(params.get("draft_id") or "new")
         if not new_quote:
-            raise ReviewError("missing_quote", "缺少新稿原文，未写入批注。")
+            raise ReviewError("missing_quote", "缺少新稿原文，未写入候选。")
         issue = self._confirmed_issue(issue_id)
         if not _history_text_on_record(issue.original_span, issue) and not self._quote_in_source_or_opened(
             issue.original_span
         ):
-            raise ReviewError("issue_mismatch", "旧稿原文与记录对不上，未写入批注。")
+            raise ReviewError("issue_mismatch", "旧稿原文与记录对不上，未写入候选。")
         if not _history_text_on_record(issue.original_text, issue) and not self._quote_in_source_or_opened(
             issue.original_text
         ):
-            raise ReviewError("issue_mismatch", "旧稿批注与记录对不上，未写入批注。")
+            raise ReviewError("issue_mismatch", "旧稿批注与记录对不上，未写入候选。")
         original_paras = self._original_paragraphs()
         source_para = _paragraph_with_quote(new_quote, original_paras)
         if source_para is None and self._paragraph_with_quote(new_quote) is None:
-            raise ReviewError("quote_not_in_draft", "新稿原文不在稿件中，未写入批注。")
+            raise ReviewError("quote_not_in_draft", "新稿原文不在稿件中，未写入候选。")
         hit = match_issue(issue, original_paras)
+        semantic_ok = False
         if hit is None or new_quote not in hit.new_quote:
-            raise ReviewError("quote_not_in_draft", "新稿原文与历史召回位置对不上，未写入批注。")
+            semantic_ok = any(
+                item.issue_id == issue.id and new_quote in item.new_quote
+                for item in semantic_recall([issue], original_paras, limit=8)
+            )
+            if not semantic_ok:
+                raise ReviewError("quote_not_in_draft", "新稿原文与历史召回位置对不上，未写入候选。")
         quote_para = self._paragraph_with_quote(new_quote)
-        if quote_para is None:
+        if quote_para is None and hit is not None:
             quote_para = next((item for item in self._paragraphs() if item.ordinal == hit.paragraph_index), None)
         if quote_para is None:
-            raise ReviewError("quote_not_in_draft", "新稿原文不在稿件中，未写入批注。")
-        finding = _history_finding(
-            HistoryHit(
-                issue_id=issue.id,
-                new_anchor=quote_para.anchor,
-                new_quote=new_quote,
-                paragraph_index=quote_para.ordinal,
-                evidence_text=issue.original_text,
-                original_span=issue.original_span or hit.original_span,
-                category=issue.category,
+            raise ReviewError("quote_not_in_draft", "新稿原文不在稿件中，未写入候选。")
+        finding = prepare_candidate(
+            _history_finding(
+                HistoryHit(
+                    issue_id=issue.id,
+                    new_anchor=quote_para.anchor,
+                    new_quote=new_quote,
+                    paragraph_index=quote_para.ordinal,
+                    evidence_text=issue.original_text,
+                    original_span=issue.original_span or (hit.original_span if hit else ""),
+                    category=issue.category,
+                ),
+                issue,
+                draft_id,
+                confirmed=True,
             ),
-            issue,
-            draft_id,
+            session_id=self.session_id,
         )
-        self._apply([finding])
+        if params.get("rationale"):
+            finding.rationale = str(params.get("rationale"))
+            finding.original_rationale = finding.rationale
         self.findings.append(finding)
         return {"ok": True, "id": finding.id}
 
     def _confirmed_issue(self, issue_id: str) -> IssueRecord:
         if not issue_id:
-            raise ReviewError("issue_mismatch", "缺少历史问题编号，未写入批注。")
+            raise ReviewError("issue_mismatch", "缺少历史问题编号，未写入候选。")
         try:
             issue = self.service.store.get(issue_id)
         except KeyError as exc:
-            raise ReviewError("issue_mismatch", "历史问题不存在，未写入批注。") from exc
+            raise ReviewError("issue_mismatch", "历史问题不存在，未写入候选。") from exc
         if (
             issue.teacher_id != self.teacher_id
             or issue.student_id != self.student_id
             or issue.status != "confirmed"
         ):
-            raise ReviewError("issue_mismatch", "历史问题不属于当前师生或尚未确认，未写入批注。")
+            raise ReviewError("issue_mismatch", "历史问题不属于当前师生或尚未确认，未写入候选。")
         return issue
 
     def op_list_outline(self, params: dict) -> dict:
@@ -306,77 +410,181 @@ class Worker:
                 break
         return {"hits": hits}
 
+    def op_web_search(self, params: dict) -> dict:
+        if self.search_calls >= SEARCH_BUDGET:
+            raise ReviewError("search_budget", "外部检索次数已达上限。")
+        query = str(params.get("query") or params.get("needle") or "").strip()
+        if not query:
+            raise ReviewError("invalid_params", "缺少检索词。")
+        try:
+            hits = self.searcher.search(query, limit=int(params.get("limit") or 5))
+        except ReviewError as exc:
+            if exc.code == "search_failed":
+                self.search_calls += 1
+                return {"ok": False, "error": exc.message, "hits": [], "query": query, "fabricated": False}
+            raise
+        self.search_calls += 1
+        return {
+            "ok": True,
+            "query": query,
+            "hits": [item.to_dict() if hasattr(item, "to_dict") else item for item in hits],
+            "fabricated": False,
+        }
+
+    def op_web_fetch(self, params: dict) -> dict:
+        if self.search_calls >= SEARCH_BUDGET:
+            raise ReviewError("search_budget", "外部检索次数已达上限。")
+        url = str(params.get("url") or "").strip()
+        try:
+            result = self.searcher.fetch(url)
+        except ReviewError as exc:
+            if exc.code in {"search_failed", "invalid_params"}:
+                self.search_calls += 1
+                return {"ok": False, "error": exc.message, "url": url, "text": "", "fabricated": False}
+            raise
+        self.search_calls += 1
+        return result
+
     def op_record_argument_finding(self, params: dict) -> dict:
-        claim = str(params.get("claim_quote") or "").strip()
-        evidence = str(params.get("evidence_quote") or "").strip()
+        params = dict(params)
+        params.setdefault("kind", "content")
+        params.setdefault("subtype", "argument")
+        params.setdefault("claim_quote", params.get("quote"))
+        return self.op_record_content_finding(params)
+
+    def op_record_external_finding(self, params: dict) -> dict:
+        params = dict(params)
+        params["kind"] = "external"
+        params.setdefault("subtype", params.get("subtype") or "citation")
+        return self.op_record_content_finding(params)
+
+    def op_record_content_finding(self, params: dict) -> dict:
+        kind = str(params.get("kind") or "content").strip() or "content"
+        subtype = str(params.get("subtype") or "").strip()
+        quote = str(params.get("quote") or params.get("claim_quote") or "").strip()
+        evidence_quote = str(params.get("evidence_quote") or params.get("quote_b") or "").strip()
         problem = str(params.get("problem") or "").strip()
         rationale = str(params.get("rationale") or "").strip()
         draft_id = str(params.get("draft_id") or "new")
-        if self.argument_count >= MAX_ARGUMENT_FINDINGS:
-            raise ReviewError("argument_limit", "论证发现已达上限。")
+        section = str(params.get("section") or "").strip()
+        suggested_action = str(params.get("suggested_action") or "").strip()
+        if self.content_count >= MAX_CONTENT_FINDINGS:
+            raise ReviewError("argument_limit", "内容发现已达上限。")
         if "再次" in f"{problem}\n{rationale}" or "屡次" in f"{problem}\n{rationale}":
             raise ReviewError("repeat_wording", "论证批注不能使用「再次」「屡次」。")
-        claim_para = self._paragraph_with_quote(claim)
-        evidence_para = self._paragraph_with_quote(evidence)
-        if claim_para is None or evidence_para is None:
-            raise ReviewError("quote_not_in_draft", "主张或证据原文不在稿件中，未写入批注。")
-        self.argument_count += 1
-        finding = Finding(
-            id=f"argument-{self.argument_count}",
-            category="B",
-            source="argument",
-            code="claim_without_evidence",
-            problem=problem or "关键主张缺少与用词相符的实验证据。",
-            rationale=rationale or "对照实验或结果原文后，主张未能被数据支持。",
-            quote=claim,
-            anchor=claim_para.anchor,
-            paragraph_index=claim_para.ordinal,
-            apply="comment",
-            draft_id=draft_id,
-            evidence=[
-                Evidence(kind="claim", draft_id=draft_id, text=claim),
-                Evidence(kind="evidence", draft_id=draft_id, text=evidence),
-            ],
+        if kind == "external":
+            sources = _parse_external_sources(params)
+            if not sources:
+                raise ReviewError("missing_source", "外部核验缺少来源，未写入候选。")
+        else:
+            sources = _parse_external_sources(params)
+        if not quote:
+            raise ReviewError("quote_not_in_draft", "主张或证据原文不在稿件中，未写入候选。")
+        claim_para = self._paragraph_with_quote(quote)
+        if claim_para is None:
+            raise ReviewError("quote_not_in_draft", "主张或证据原文不在稿件中，未写入候选。")
+        evidence_para = self._paragraph_with_quote(evidence_quote) if evidence_quote else None
+        needs_pair = subtype in {"argument", "data_consistency"} or bool(params.get("claim_quote")) or bool(params.get("evidence_quote"))
+        if needs_pair:
+            if not evidence_quote or evidence_para is None:
+                raise ReviewError("quote_not_in_draft", "主张或证据原文不在稿件中，未写入候选。")
+        elif evidence_quote and evidence_para is None:
+            raise ReviewError("quote_not_in_draft", "对照证据原文不在稿件中，未写入候选。")
+        if subtype and subtype not in CONTENT_SUBTYPES and kind == "content":
+            subtype = subtype or "argument"
+        self.content_count += 1
+        self.argument_count = self.content_count
+        category = "B"
+        if kind == "language":
+            category = "A"
+        elif kind == "format":
+            category = "C"
+        elif kind == "history":
+            category = "D"
+        evidence = [Evidence(kind="claim", draft_id=draft_id, text=quote, anchor=claim_para.anchor)]
+        if evidence_quote:
+            evidence.append(
+                Evidence(
+                    kind="evidence",
+                    draft_id=draft_id,
+                    text=evidence_quote,
+                    anchor=evidence_para.anchor if evidence_para else "",
+                )
+            )
+        source = "argument" if subtype == "argument" and kind == "content" else kind
+        if kind == "content" and subtype == "argument":
+            source = "argument"
+        elif kind == "external":
+            source = "external"
+        elif kind == "history":
+            source = "history"
+        elif kind in {"language", "format"}:
+            source = "rule"
+        finding = prepare_candidate(
+            Finding(
+                id=f"{kind}-{self.content_count}-{uuid.uuid4().hex[:8]}",
+                category=category,
+                source=source,
+                code=str(params.get("code") or subtype or kind),
+                problem=problem or "稿件内容存在需要老师核对的问题。",
+                rationale=rationale or "对照原文后，该判断有有限证据支持。",
+                quote=quote,
+                anchor=claim_para.anchor,
+                paragraph_index=claim_para.ordinal,
+                apply="comment",
+                draft_id=draft_id,
+                kind=kind,
+                subtype=subtype,
+                section=section,
+                suggested_action=suggested_action,
+                evidence=evidence,
+                history_refs=[str(item) for item in (params.get("history_refs") or []) if item],
+                external_sources=sources,
+                issue_id=str(params.get("issue_id") or "") or None,
+            ),
+            session_id=self.session_id,
         )
-        self._apply([finding])
+        if kind == "content" and subtype == "argument":
+            finding.id = f"argument-{self.content_count}"
+            finding.code = str(params.get("code") or "claim_without_evidence")
+            finding.source = "argument"
         self.findings.append(finding)
         return {"ok": True, "id": finding.id}
 
     def op_add_comment(self, params: dict) -> dict:
-        opened = self._require_open()
-        self.adapter.add_comment(
-            opened,
-            anchor=str(params["anchor"]),
-            text=str(params["text"]),
-            author=str(params.get("author") or ASSISTANT_AUTHOR),
-        )
-        return {"ok": True}
+        raise ReviewError("teacher_gate", "候选意见不能直接写入 Word，请老师确认后再导出。")
 
     def op_replace_tracked(self, params: dict) -> dict:
-        opened = self._require_open()
-        result = self.adapter.replace_tracked(
-            opened,
-            anchor=str(params["anchor"]),
-            old=str(params["old"]),
-            new=str(params["new"]),
-            author=str(params.get("author") or ASSISTANT_AUTHOR),
-        )
-        return {"n_replaced": result.n_replaced, "new_anchor": result.new_anchor}
+        raise ReviewError("teacher_gate", "候选意见不能直接写入 Word，请老师确认后再导出。")
 
     def op_commit_review(self, params: dict) -> dict:
-        opened = self._require_open()
+        self._require_open()
         output_dir = Path(params["output_dir"])
         draft_id = str(params.get("draft_id") or "new")
         output_dir.mkdir(parents=True, exist_ok=True)
+        source_path = output_dir / f"{draft_id}-source.docx"
         reviewed_path = output_dir / f"{draft_id}-reviewed.docx"
         findings_path = output_dir / f"{draft_id}-findings.json"
-        self.adapter.save(opened, reviewed_path)
+        source_path.write_bytes(self.original)
+        # Clean copy only. Formal student Word is generated after teacher decisions.
+        reviewed_path.write_bytes(self.original)
         findings_path.write_text(
             json.dumps([item.to_dict() for item in self.findings], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        if self.session_id:
+            try:
+                session = self.sessions.get(self.session_id)
+                session.findings = list(self.findings)
+                session.source_path = str(source_path)
+                session.output_dir = str(output_dir)
+                session.status = "awaiting_teacher"
+                self.sessions.save(session)
+            except KeyError:
+                pass
         return {
             "reviewed_path": str(reviewed_path),
+            "source_path": str(source_path),
             "findings_path": str(findings_path),
             "n_findings": len(self.findings),
         }
@@ -402,37 +610,13 @@ class Worker:
             return True
         return self._paragraph_with_quote(quote) is not None
 
-    def _apply(self, findings: list[Finding]) -> None:
-        opened = self._require_open()
-        for finding in findings:
-            if finding.apply in {"comment", "both"} and finding.anchor.startswith("P"):
-                try:
-                    self.adapter.add_comment(
-                        opened,
-                        anchor=finding.anchor,
-                        text=_comment_body(finding),
-                        author=ASSISTANT_AUTHOR,
-                    )
-                except ReviewError:
-                    continue
-        for finding in findings:
-            if finding.apply in {"revision", "both"} and finding.suggested_old and finding.suggested_new:
-                try:
-                    self.adapter.replace_tracked(
-                        opened,
-                        anchor=finding.anchor,
-                        old=finding.suggested_old,
-                        new=finding.suggested_new,
-                        author=ASSISTANT_AUTHOR,
-                    )
-                except ReviewError:
-                    continue
-
 
 def _safe_trace_params(params: dict) -> dict:
     safe = {key: params[key] for key in TRACE_PARAM_KEYS if key in params}
     if "needle" in params:
         safe["needle_len"] = len(str(params.get("needle") or ""))
+    if "query" in params:
+        safe["query_len"] = len(str(params.get("query") or ""))
     return safe
 
 
@@ -458,6 +642,8 @@ def _candidate_payload(hit: HistoryHit, issue: IssueRecord) -> dict:
         "scope": issue.scope,
         "teacher_intent": issue.teacher_intent,
         "expected_fix": issue.suggested_fix,
+        "needs_context_check": True,
+        "auto_recidivism": False,
     }
 
 
@@ -466,6 +652,31 @@ def _history_text_on_record(text: str, issue: IssueRecord) -> bool:
     if not value:
         return True
     return value in {issue.original_span, issue.original_text, issue.problem}
+
+
+def _parse_external_sources(params: dict) -> list[ExternalSource]:
+    raw = params.get("external_sources") or params.get("sources") or []
+    if isinstance(raw, dict):
+        raw = [raw]
+    sources: list[ExternalSource] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if not url and not title:
+            continue
+        sources.append(
+            ExternalSource(
+                title=title or url,
+                url=url,
+                source_type=str(item.get("source_type") or "web"),
+                query=str(item.get("query") or params.get("query") or ""),
+                checked_time=str(item.get("checked_time") or ""),
+                snippet=str(item.get("snippet") or ""),
+            )
+        )
+    return sources
 
 
 def _is_outline_heading(text: str) -> bool:
@@ -547,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--major", default="人工智能")
     parser.add_argument("--portfile", type=Path, default=None)
     parser.add_argument("--live", type=Path, default=None)
+    parser.add_argument("--session", default="")
     args = parser.parse_args(argv)
     worker = Worker(
         home=args.home,
@@ -554,6 +766,7 @@ def main(argv: list[str] | None = None) -> int:
         student_id=args.student,
         major=args.major,
         live=args.live,
+        session_id=args.session,
     )
     if args.portfile is not None:
         _serve_tcp(worker, args.portfile)

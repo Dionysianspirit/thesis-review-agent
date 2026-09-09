@@ -6,10 +6,15 @@ import io
 from docx import Document
 
 from thesis_review.fixtures import (
+    FULL_ABSTRACT_RATE,
+    FULL_CONCLUSION_RATE,
+    FULL_OVERCLAIM,
+    FULL_STATS,
     OVERCLAIM_CLAIM_QUOTE,
     OVERCLAIM_EVIDENCE_QUOTE,
     SUPPORTED_CLAIM_QUOTE,
     SUPPORTED_EVIDENCE_QUOTE,
+    full_thesis_draft as sample_full_thesis_draft,
     overclaim_draft as sample_overclaim_draft,
     supported_claim_draft as sample_supported_claim_draft,
 )
@@ -26,6 +31,11 @@ __all__ = [
     "sample_overclaim_draft",
     "sample_supported_claim_draft",
     "sample_long_section_draft",
+    "sample_full_thesis_draft",
+    "FULL_ABSTRACT_RATE",
+    "FULL_CONCLUSION_RATE",
+    "FULL_OVERCLAIM",
+    "FULL_STATS",
 ]
 
 

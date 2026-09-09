@@ -31,6 +31,7 @@ def check_format(
                     anchor=table.previous_anchor or table.anchor,
                     paragraph_index=table.ordinal,
                     apply="comment",
+                    kind="format",
                     draft_id=draft_id,
                     evidence=[Evidence(kind="rule", draft_id=draft_id, text=table.previous_text)],
                 )
@@ -73,6 +74,7 @@ def _reference_gaps(paragraphs: list[ParagraphView], *, draft_id: str) -> list[F
             anchor=last.anchor,
             paragraph_index=last.ordinal,
             apply="comment",
+            kind="format",
             draft_id=draft_id,
             evidence=[Evidence(kind="rule", draft_id=draft_id, text=" ".join(str(n) for n in values))],
         )

@@ -42,6 +42,7 @@ def _finding(**kwargs) -> Finding:
     kwargs.setdefault("category", "C")
     kwargs.setdefault("source", "rule")
     kwargs.setdefault("apply", "comment")
+    kwargs.setdefault("kind", "format")
     kwargs.setdefault("id", uuid.uuid4().hex)
     kwargs.setdefault("suggested_old", None)
     kwargs.setdefault("suggested_new", None)

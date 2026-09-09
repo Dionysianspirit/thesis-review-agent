@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Python)) {
@@ -17,22 +19,12 @@ npm ci --omit=dev
 Pop-Location
 
 # PyInstaller gets an ASCII name; Python then renames the folder/exe to 论文审改助手.
+# Freeze flags live in scripts/pyinstaller_build.py so Windows and Linux smoke stay in sync.
 $DistName = "ThesisReviewAgent"
-$Entry = Join-Path $Root "python\thesis_review\gui\app.py"
-$GuiData = "python\thesis_review\gui;thesis_review\gui"
-$EngineData = ".vendor\docxengine\src;docxengine"
-
-& $Python -m PyInstaller --noconfirm --clean --windowed --onedir `
-    --name $DistName `
-    --paths (Join-Path $Root "python") `
-    --add-data $GuiData `
-    --add-data $EngineData `
-    --hidden-import thesis_review `
-    --hidden-import thesis_review.gui.app `
-    --hidden-import docx `
-    --collect-submodules thesis_review `
-    --collect-all webview `
-    $Entry
+& $Python (Join-Path $Root "scripts\pyinstaller_build.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller freeze failed with exit $LASTEXITCODE"
+}
 
 $OutDir = Join-Path $Root "dist\$DistName"
 $Exe = Join-Path $OutDir "$DistName.exe"
@@ -47,28 +39,22 @@ $AgentOut = Join-Path $OutDir "agent"
 if (Test-Path $AgentOut) { Remove-Item $AgentOut -Recurse -Force }
 Copy-Item -Path (Join-Path $Root "agent") -Destination $AgentOut -Recurse -Force
 
-$BundledNode = Join-Path $RuntimeNode "node.exe"
-$Selftest = Start-Process -FilePath $BundledNode -ArgumentList @((Join-Path $AgentOut "review.mjs"), "--selftest") -WorkingDirectory $AgentOut -Wait -PassThru -NoNewWindow
-if ($Selftest.ExitCode -ne 0) {
-    throw "Bundled pi selftest failed"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+# rename_dist.py prints the product exe path; do not put that Chinese path in a
+# PowerShell quoted string (encoding can unbalance quotes at parse time).
+$RenameOut = & $Python (Join-Path $Root "scripts\rename_dist.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "rename_dist.py failed with exit $LASTEXITCODE"
 }
-
-$Probe = Join-Path $Root "artifacts\packaged-demo"
-if (Test-Path $Probe) { Remove-Item $Probe -Recurse -Force }
-New-Item -ItemType Directory -Path $Probe | Out-Null
-$proc = Start-Process -FilePath $Exe -ArgumentList @("--home", $Probe, "demo", "--out", $Probe) -Wait -PassThru
-if ($proc.ExitCode -ne 0) {
-    throw "Packaged demo review failed with exit $($proc.ExitCode)"
+$ProductExe = ($RenameOut | Select-Object -Last 1).ToString().Trim()
+if (-not (Test-Path $ProductExe)) {
+    throw "rename_dist.py did not print a product exe path"
 }
-$Findings = $null
-foreach ($i in 1..10) {
-    $Findings = Get-ChildItem -Path $Probe -Filter "*-findings.json" -ErrorAction SilentlyContinue
-    if ($Findings) { break }
-    Start-Sleep -Milliseconds 200
+$ProductDir = Split-Path -Parent $ProductExe
+Write-Output $ProductExe
+$Smoke = Join-Path $Root "scripts\smoke_packaged_demo.py"
+& $Python $Smoke --dist $ProductDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Frozen teacher EXE smoke failed with exit $LASTEXITCODE"
 }
-if (-not $Findings) {
-    throw "Packaged demo did not write findings.json"
-}
-Write-Output "Built $Exe"
-Write-Output "Demo findings: $($Findings.FullName)"
-& $Python (Join-Path $Root "scripts\rename_dist.py")
