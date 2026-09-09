@@ -44,6 +44,8 @@ def test_offline_review_labels_history_and_rule_findings(tmp_path: Path):
     history_item = next(item for item in result.findings if item.source == "history")
     assert history_item.issue_id == subjective.id
     assert "待老师判断" in history_item.problem
+    snippet = (subjective.problem or subjective.original_text or "").strip()[:8]
+    assert snippet in history_item.problem
     assert "仍出现已确认的历史问题" not in history_item.problem
     assert any("避免主观评价" in evidence.text for evidence in history_item.evidence)
     assert all(item.teacher_decision == "pending" for item in result.findings)

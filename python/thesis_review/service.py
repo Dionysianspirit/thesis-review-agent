@@ -549,11 +549,20 @@ def _history_finding(
     confirmed: bool = False,
 ) -> Finding:
     if confirmed:
+        recalled = (issue.problem or issue.original_text or "").strip().replace("\n", " ")
         problem = "学生在新稿中仍出现已确认的历史问题。"
+        if recalled:
+            problem = f"学生在新稿中仍出现已确认的历史问题：{recalled}"
         rationale = f"历次稿件已指出：{issue.original_text}"
         suggested = "请对照旧稿批注意图修改，并补上可核验的依据。"
     else:
-        problem = "历史召回：新稿出现与已确认历史问题相似的原文，待老师判断是否复犯。"
+        recalled = (issue.problem or issue.original_text or "").strip().replace("\n", " ")
+        if len(recalled) > 60:
+            recalled = recalled[:60].rstrip() + "…"
+        if recalled:
+            problem = f"历史召回：{recalled}。新稿出现相似原文，待老师判断是否复犯。"
+        else:
+            problem = "历史召回：新稿出现与已确认历史问题相似的原文，待老师判断是否复犯。"
         rationale = f"仅召回相似原文，未经模型确认，不能直接写成复犯。旧稿批注：{issue.original_text}"
         suggested = "请老师判断是否仍是同一问题；未确认前不会写入正式学生稿。"
     return Finding(

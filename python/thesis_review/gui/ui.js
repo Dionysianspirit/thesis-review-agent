@@ -648,7 +648,7 @@ const DEMO_STATE = {
       kind: "history",
       category: "A",
       teacher_decision: "pending",
-      problem: "历史召回：新稿出现与已确认历史问题相似的原文，待老师判断是否复犯。",
+      problem: "历史召回：避免主观评价。新稿出现相似原文，待老师判断是否复犯。",
       rationale: "仅召回相似原文，未经模型确认，不能直接写成复犯。旧稿批注：不要用「非常非常有效」这类叠词主观评价，要有数据支撑。",
       quote: "非常非常有效",
       anchor: "P0012",
