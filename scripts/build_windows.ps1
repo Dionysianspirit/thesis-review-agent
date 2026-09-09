@@ -69,6 +69,21 @@ foreach ($i in 1..10) {
 if (-not $Findings) {
     throw "Packaged demo did not write findings.json"
 }
+$Gate = Join-Path $Probe "teacher-gate.json"
+if (-not (Test-Path $Gate)) {
+    throw "Packaged demo did not write teacher-gate.json"
+}
+$GatePayload = Get-Content -Path $Gate -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $GatePayload.ok) {
+    throw "Packaged teacher-gate demo failed: $($GatePayload.error)"
+}
+if ($GatePayload.comments_before -ne 0) {
+    throw "Teacher gate failed: comments were written before teacher decisions"
+}
+if ([int]$GatePayload.n_exported -lt 1 -or [int]$GatePayload.comments_after -lt 1) {
+    throw "Packaged demo did not export teacher-approved Word comments"
+}
 Write-Output "Built $Exe"
 Write-Output "Demo findings: $($Findings.FullName)"
+Write-Output "Teacher-gate comments: $($GatePayload.comments_after) exported=$($GatePayload.n_exported)"
 & $Python (Join-Path $Root "scripts\rename_dist.py")

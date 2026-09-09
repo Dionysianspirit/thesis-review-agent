@@ -356,11 +356,13 @@ python -m pytest tests -q
 powershell -File scripts/start_gui.ps1
 ```
 
-无窗口离线演示：
+无窗口离线演示（含老师确认门，并把已确认意见写入正式 Word 批注）：
 
 ```bash
 python -m thesis_review.cli demo --out artifacts/demo
 ```
+
+成功时会写出 `new-reviewed.docx`、`new-findings.json` 和 `teacher-gate.json`。其中 `teacher-gate.json` 记录初审后批注数为 0、老师决定后正式稿批注数，以及驳回意见未写入。已有审稿会话可用 `thesis-review export --session <id>` 再次生成正式稿。
 
 本机密钥下的真实模型金标（会调用云端模型，结果写在 `artifacts/eval/`，不进 git）：
 
@@ -389,7 +391,7 @@ powershell -File scripts/build_windows.ps1
 - 不需要单独安装 `python-docx`
 - 不需要 Node.js
 
-构建脚本还会运行打包后的 demo / Pi self-test，避免只“打包成功”但产物不能实际启动。
+构建脚本还会运行打包后的 demo / Pi self-test，并核验 `teacher-gate.json`：初审后 Word 无批注，老师确认后正式稿含已认可意见。这避免只“打包成功”但产物不能实际走完教师确认门。
 
 ---
 
