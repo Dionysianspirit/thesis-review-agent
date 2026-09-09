@@ -170,3 +170,33 @@ def test_faux_curly_quote_draft_keeps_exact_file_names(tmp_path: Path):
     assert result.findings_path.is_file()
     assert result.reviewed_path.is_file()
     assert not result.warning
+
+
+def test_agent_run_log_stamps_match_python_local_offset(tmp_path: Path):
+    """The Node-side agent log must use the same local-offset stamp as applog
+    so the interleaved run.log reads chronologically."""
+    import re
+
+    from thesis_review.history.store import HistoryStore
+    from thesis_review.service import ThesisReviewService
+    from thesis_review.word.adapter import WordAdapter
+
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "thesis-review.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="stamps",
+        data=sample_overclaim_draft(),
+        output_dir=tmp_path / "out",
+        use_pi=True,
+        faux=True,
+    )
+    run_log = tmp_path / "logs" / "run.log"
+    assert run_log.is_file()
+    stamp_re = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}) ")
+    for line in run_log.read_text(encoding="utf-8").splitlines():
+        assert stamp_re.match(line), f"non-local timestamp: {line!r}"

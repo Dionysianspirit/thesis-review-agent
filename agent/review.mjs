@@ -32,11 +32,25 @@ function parseArgs(argv) {
   return out;
 }
 
+// Match the Python applog stamp (local time with numeric offset) so lines
+// from both sides interleave in one chronological order.
+function localStamp(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  );
+}
+
 function appendAgentLog(name, line) {
   const dir = process.env.THESIS_LOG_DIR;
   if (!dir) return;
   try {
-    const stamp = new Date().toISOString();
+    const stamp = localStamp();
     appendFileSync(path.join(dir, name), `${stamp} ${line}\n`, { encoding: "utf8" });
   } catch {
     // logging must not break review
@@ -307,7 +321,7 @@ function allTools(call) {
       rationale: Type.String(),
       draft_id: Type.Optional(Type.String()),
     })),
-    makeTool(call, "record_content_finding", "记录内容问题", "记录论证、数据、方法、实验或结构问题。原文必须真实存在。", Type.Object({
+    makeTool(call, "record_content_finding", "记录内容问题", "记录论证、数据、方法、实验或结构问题。原文必须真实存在。kind 只能填 content/language/format；subtype 从 argument/data_consistency/method/experiment/structure/terminology/citation 中选。", Type.Object({
       kind: Type.Optional(Type.String()),
       subtype: Type.String(),
       quote: Type.String(),

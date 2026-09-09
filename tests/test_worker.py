@@ -455,3 +455,67 @@ def test_nav_budget_scales_with_long_draft_and_reports_nav_left(tmp_path: Path):
     hits = worker.dispatch("find_text", {"needle": "热点舆情"})
     assert "nav_left" in hits
     assert hits["nav_left"] == 40
+
+
+def test_record_finding_rejects_freeform_kind(tmp_path: Path):
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
+    _open(worker, sample_overclaim_draft())
+    para = _paragraph_containing(worker, OVERCLAIM_CLAIM_QUOTE)
+    with pytest.raises(ReviewError) as caught:
+        worker.dispatch(
+            "record_content_finding",
+            {
+                "kind": "语言问题",
+                "subtype": "结论无支撑",
+                "quote": para["text"][:12],
+                "problem": "结论无支撑。",
+                "rationale": "缺少实验依据。",
+            },
+        )
+    assert caught.value.code == "invalid_params"
+    assert "content/external/format/language" in str(caught.value)
+    ok = worker.dispatch(
+        "record_content_finding",
+        {
+            "kind": "language",
+            "subtype": "terminology",
+            "quote": para["text"][:12],
+            "problem": "用词问题。",
+            "rationale": "缺少实验依据。",
+        },
+    )
+    assert ok["ok"] is True
+    assert worker.findings[-1].category == "A"
+
+
+def test_argument_limit_message_names_external_at_cap(tmp_path: Path):
+    from thesis_review.worker import MAX_CONTENT_FINDINGS
+
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
+    _open(worker, sample_overclaim_draft())
+    para = _paragraph_containing(worker, OVERCLAIM_CLAIM_QUOTE)
+    quote = para["text"][:10]
+    for _index in range(MAX_CONTENT_FINDINGS):
+        worker.dispatch(
+            "record_content_finding",
+            {
+                "kind": "content",
+                "subtype": "structure",
+                "quote": quote,
+                "problem": "依据不足。",
+                "rationale": "需要实验数据支持。",
+            },
+        )
+    with pytest.raises(ReviewError) as caught:
+        worker.dispatch(
+            "record_external_finding",
+            {
+                "quote": quote,
+                "problem": "外部数据需核对。",
+                "rationale": "宏观数据需要来源。",
+                "external_sources": [{"title": "来源", "url": "https://example.com/a"}],
+            },
+        )
+    assert caught.value.code == "argument_limit"
+    assert "外部核验" in str(caught.value)
+    assert str(MAX_CONTENT_FINDINGS) in str(caught.value)

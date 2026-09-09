@@ -43,6 +43,9 @@ LIVE_FINDING_OPS = frozenset(
 )
 NAV_BUDGET = 20
 NAV_BUDGET_MAX = 60
+# Free-form kinds like「语言问题」 silently misroute category derivation, so
+# only canonical kinds are accepted at the record boundary.
+RECORD_KINDS = frozenset({"content", "language", "format", "external"})
 SEARCH_BUDGET = 3
 TRACE_PARAM_KEYS = frozenset({"start_ordinal", "limit", "max_hits", "draft_id", "issue_id", "subtype", "kind"})
 MAX_READ_PARAS = 8
@@ -497,6 +500,11 @@ class Worker:
 
     def op_record_content_finding(self, params: dict) -> dict:
         kind = str(params.get("kind") or "content").strip() or "content"
+        if kind not in RECORD_KINDS:
+            raise ReviewError(
+                "invalid_params",
+                f"kind 只能是 {'/'.join(sorted(RECORD_KINDS))}，收到：{kind}。",
+            )
         subtype = str(params.get("subtype") or "").strip()
         quote = str(params.get("quote") or params.get("claim_quote") or "").strip()
         evidence_quote = str(params.get("evidence_quote") or params.get("quote_b") or "").strip()
@@ -506,7 +514,11 @@ class Worker:
         section = str(params.get("section") or "").strip()
         suggested_action = str(params.get("suggested_action") or "").strip()
         if self.content_count >= MAX_CONTENT_FINDINGS:
-            raise ReviewError("argument_limit", "内容发现已达上限。")
+            label = "外部核验" if kind == "external" else "内容发现"
+            raise ReviewError(
+                "argument_limit",
+                f"{label}已达上限（内容与外部核验合计 {MAX_CONTENT_FINDINGS} 条），只能提交审改。",
+            )
         if "再次" in f"{problem}\n{rationale}" or "屡次" in f"{problem}\n{rationale}":
             raise ReviewError("repeat_wording", "论证批注不能使用「再次」「屡次」。")
         if kind == "external":
