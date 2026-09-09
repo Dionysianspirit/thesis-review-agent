@@ -7,6 +7,7 @@ import sys
 import uuid
 from pathlib import Path
 
+from thesis_review.applog import setup, write_error, write_op, write_run
 from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.cli import build_service
@@ -116,12 +117,30 @@ class Worker:
                 result["trace_path"] = self._write_trace(params)
                 self._write_live_findings()
                 self._emit_live("done", {}, ok=True)
+            write_op(
+                self.home,
+                op,
+                ok=True,
+                session=self.session_id,
+                **_safe_trace_params(params),
+            )
             return result
         except ReviewError as exc:
             if exc.code in GATE_FAIL_CODES:
                 self.gate_rejects += 1
             self._record_trace(op, params, ok=False, code=exc.code)
             self._emit_live(op, params, ok=False, code=exc.code)
+            write_op(
+                self.home,
+                op,
+                ok=False,
+                code=exc.code,
+                session=self.session_id,
+                **_safe_trace_params(params),
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001 - log then protocol-encode
+            write_error(self.home, f"worker {op} crashed", exc=exc, session=self.session_id)
             raise
 
     def _record_trace(self, op: str, params: dict, *, ok: bool, code: str = "") -> None:
@@ -772,6 +791,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live", type=Path, default=None)
     parser.add_argument("--session", default="")
     args = parser.parse_args(argv)
+    setup(args.home, kind="worker")
+    write_run(
+        args.home,
+        "worker listen",
+        teacher=args.teacher,
+        student=args.student,
+        session=args.session,
+        portfile=str(args.portfile or ""),
+    )
     worker = Worker(
         home=args.home,
         teacher_id=args.teacher,

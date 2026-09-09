@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -30,6 +30,17 @@ function parseArgs(argv) {
     else if (argv[i] === "--request") out.request = argv[++i];
   }
   return out;
+}
+
+function appendAgentLog(name, line) {
+  const dir = process.env.THESIS_LOG_DIR;
+  if (!dir) return;
+  try {
+    const stamp = new Date().toISOString();
+    appendFileSync(path.join(dir, name), `${stamp} ${line}\n`, { encoding: "utf8" });
+  } catch {
+    // logging must not break review
+  }
 }
 
 function removeIfExists(file) {
@@ -118,10 +129,12 @@ async function startWorker(cfg) {
       PYTHONPATH: cfg.pythonpath,
       PYTHONIOENCODING: "utf-8",
       THESIS_REVIEW_ROOT: process.env.THESIS_REVIEW_ROOT || "",
+      THESIS_LOG_DIR: process.env.THESIS_LOG_DIR || path.join(cfg.home || "", "logs"),
     },
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   });
+  appendAgentLog("run.log", `[run] worker spawn python=${cfg.python} portfile=${portfile}`);
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
@@ -153,6 +166,7 @@ async function startWorker(cfg) {
     try {
       socket = await connectWorker(port);
       lastError = null;
+      appendAgentLog("run.log", `[run] worker connected port=${port}`);
       break;
     } catch (error) {
       lastError = error;
@@ -625,6 +639,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(committed)}\n`);
   } catch (error) {
     process.stderr.write(`${worker.stderr()}\n`);
+    appendAgentLog("error.log", `[error] agent ${error.stack || error.message}`);
     throw error;
   } finally {
     worker.socket.end();
@@ -634,5 +649,6 @@ async function main() {
 
 main().catch((error) => {
   process.stderr.write(`${error.stack || error.message}\n`);
+  appendAgentLog("error.log", `[error] ${error.stack || error.message}`);
   process.exit(1);
 });

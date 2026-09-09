@@ -21,6 +21,8 @@ def test_agent_entry_points_at_review_script():
     assert "unlinkSync" in text
     assert "removeIfExists" in text
     assert "connectWorker" in text
+    assert "THESIS_LOG_DIR" in text
+    assert "appendAgentLog" in text
 
 
 def test_bundled_pi_selftest_runs():
@@ -154,6 +156,8 @@ def test_run_pi_review_writes_redacted_request_and_honors_timeout(tmp_path: Path
     assert "api_key" not in json.loads(dumped)
     assert captured["timeout"] == 600
     assert captured["env"]["THESIS_API_KEY"] == "sk-secret"
+    assert "THESIS_LOG_DIR" in captured["env"]
+    assert "sk-secret" not in captured["env"]["THESIS_LOG_DIR"]
 
 
 def test_frozen_worker_args_use_exe_worker_subcommand(monkeypatch):

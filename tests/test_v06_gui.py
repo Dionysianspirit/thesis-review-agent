@@ -25,6 +25,9 @@ def test_gui_is_teacher_workstation_with_decision_filters():
     assert "已驳回" in html
     assert "批量接受格式问题" in html
     assert "生成正式审稿稿件" in html
+    assert "打开日志文件夹" in html
+    assert "btn-logs" in html
+    assert "open_logs" in js
     assert "<details" in html
     assert "tech-log" in html
     assert "decision-tabs" in html
@@ -65,6 +68,16 @@ def test_settings_persistence_does_not_leak_or_overwrite_key(tmp_path: Path):
     assert "sk-keep-me" not in str(visible)
     dumped = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "sk-keep-me" in dumped
+
+
+def test_bridge_exposes_log_dir(tmp_path: Path):
+    bridge = Bridge(tmp_path)
+    payload = bridge.state()
+    log_path = Path(payload["log_dir"])
+    assert log_path == tmp_path / "logs"
+    assert log_path.is_dir()
+    assert (log_path / "run.log").is_file()
+    assert "gui start" in (log_path / "run.log").read_text(encoding="utf-8")
 
 
 def test_bridge_decide_export_only_writes_accepted(tmp_path: Path):
