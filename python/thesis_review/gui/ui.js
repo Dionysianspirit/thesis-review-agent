@@ -270,7 +270,30 @@ function renderTab() {
   });
 }
 
+function resolveDecision(id, decision, editedText) {
+  const item = lastFindings.find((finding) => finding.id === id);
+  const text = String(editedText == null ? "" : editedText);
+  if (decision !== "edited_accepted") {
+    return { decision, editedText: text, error: "" };
+  }
+  if (!text.trim()) {
+    return { decision, editedText: text, error: "编辑后确认需要填写老师最终意见。" };
+  }
+  const original = String((item && (item.teacher_final_text || item.problem)) || "").trim();
+  if (text.trim() === original) {
+    return { decision: "accepted", editedText: "", error: "" };
+  }
+  return { decision: "edited_accepted", editedText: text, error: "" };
+}
+
 async function onDecide(id, decision, editedText) {
+  const resolved = resolveDecision(id, decision, editedText);
+  if (resolved.error) {
+    log(resolved.error, "err");
+    return;
+  }
+  decision = resolved.decision;
+  editedText = resolved.editedText;
   if (!hasBridge()) {
     const item = lastFindings.find((finding) => finding.id === id);
     if (item) {

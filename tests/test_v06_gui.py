@@ -37,6 +37,8 @@ def test_gui_is_teacher_workstation_with_decision_filters():
     assert "target === \"reviewing\"" in js
     assert "formal === 0 || (current.pending || 0) > 0" in js
     assert "btn-export-confirmed" in js
+    assert "编辑后确认需要填写老师最终意见" in js
+    assert "text.trim() === original" in js
     assert "body.stage-prepare #sec-decide" in css
     assert "body.stage-reviewing #sec-prepare" in css
     assert "body.stage-decide #sec-prepare" in css
