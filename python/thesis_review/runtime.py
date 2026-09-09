@@ -113,7 +113,8 @@ def run_agent_selftest() -> subprocess.CompletedProcess[str]:
         cwd=str(agent_dir()),
         env=env,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
         check=False,
     )
@@ -174,7 +175,11 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
             cwd=str(agent_dir()),
             env=env,
             capture_output=True,
-            text=True,
+            # The agent prints UTF-8 (PYTHONIOENCODING=utf-8 below); without an
+            # explicit encoding Windows decodes with the ANSI code page, and a
+            # GBK-invalid byte kills the reader thread, yielding stdout=None.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -198,5 +203,7 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
         )
         raise ReviewError("pi_failed", stderr or "pi 进程失败")
     write_run(home, "pi done", session=str(payload.get("session_id") or ""))
-    payload = json.loads(result.stdout.strip().splitlines()[-1])
-    return payload
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        raise ReviewError("pi_failed", "初审进程没有返回结果。")
+    return json.loads(stdout.splitlines()[-1])

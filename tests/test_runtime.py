@@ -121,6 +121,62 @@ def test_run_pi_review_maps_timeout_to_review_error(tmp_path: Path, monkeypatch)
         raise AssertionError("expected pi_timeout")
 
 
+def test_run_pi_review_pins_utf8_decoding(tmp_path: Path, monkeypatch):
+    captured: dict = {}
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"findings_path": str(tmp_path / "out.json")})
+        stderr = ""
+
+    def fake_run(_command, **kwargs):
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr("thesis_review.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("thesis_review.runtime.resolve_node", lambda: Path("node"))
+    run_pi_review(
+        {
+            "home": str(tmp_path),
+            "teacher_id": "teacher-a",
+            "student_id": "zhou",
+            "output_dir": str(tmp_path / "eval-case"),
+        }
+    )
+    # Chinese Windows decodes pipes with the ANSI code page unless pinned; the
+    # agent's UTF-8 payload then crashes the reader thread (stdout becomes None).
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
+def test_run_pi_review_survives_none_stdout(tmp_path: Path, monkeypatch):
+    from thesis_review.errors import ReviewError
+
+    class Result:
+        returncode = 0
+        stdout = None
+        stderr = None
+
+    monkeypatch.setattr("thesis_review.runtime.subprocess.run", lambda *a, **k: Result())
+    monkeypatch.setattr("thesis_review.runtime.resolve_node", lambda: Path("node"))
+    try:
+        run_pi_review(
+            {
+                "home": str(tmp_path),
+                "teacher_id": "teacher-a",
+                "student_id": "zhou",
+                "output_dir": str(tmp_path / "eval-case"),
+            }
+        )
+    except ReviewError as exc:
+        assert exc.code == "pi_failed"
+        assert "返回结果" in str(exc)
+    except AttributeError as exc:
+        raise AssertionError(f"stdout=None must not crash with AttributeError: {exc}")
+    else:
+        raise AssertionError("expected pi_failed")
+
+
 def test_run_pi_review_writes_redacted_request_and_honors_timeout(tmp_path: Path, monkeypatch):
     captured: dict = {}
 
