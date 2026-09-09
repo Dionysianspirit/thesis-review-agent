@@ -11,18 +11,17 @@
 
 ## ⬇️ 老师：Windows 使用
 
-GitHub Release 的 **latest 目前仍是 V0.4**（**V0.4 已发布**），没有教师确认门，不能当作 V0.6 使用。在正式 V0.6 Release 发布前，请不要下载 V0.4 安装包；也不要把老师指到 v0.4.0 下载页。
+老师请从 GitHub Release 的 **[latest（V0.6）](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)** 下载 Windows 包（不要再用旧的 V0.4）。
 
-老师可以任选一种方式拿到 V0.6 预览包（Windows 10 / 11，已安装 Microsoft Word）：
+适用环境：Windows 10 / 11，已安装 Microsoft Word。解压后运行 `论文审改助手.exe`；首次启动若被 SmartScreen 拦截，选择「仍要运行」。老师不需要另行安装 Python 或 Node。
 
-1. 从本仓库最新成功的 [GitHub Actions](https://github.com/Dionysianspirit/thesis-review-agent/actions) 运行下载工件 `thesis-review-agent-windows`，解压后运行 `论文审改助手.exe`。
-2. 或在本机打包：
+开发者如需本机重打包：
 
 ```powershell
 powershell -File scripts/build_windows.ps1
 ```
 
-完成后运行 `dist\论文审改助手\论文审改助手.exe`。老师不需要另行安装 Python 或 Node；首次启动若被 SmartScreen 拦截，选择「仍要运行」。
+完成后运行 `dist\论文审改助手\论文审改助手.exe`。
 
 模型密钥是可选的。密钥只保存在本机 `%APPDATA%\ThesisReviewAgent\`，不会打进安装包，也不会提交到仓库。
 
@@ -273,7 +272,7 @@ status
 | V0.3 | ✅ | 历史问题结构化；模型确认字符串候选是否真的是同一问题 |
 | V0.4 | ✅ 已发布 | 模型判断集中到 Pi；增加主张-证据多步取证；Python 做 evidence gate |
 | V0.5 | ✅ | 窗口直播中文进度；密钥与上次稿件路径可持久化；本机真实模型金标 `thesis-review eval` |
-| V0.6 | ✅ 入口 | 教师确认门 + Review Session；四阶段工作台；有界第一轮初审（格式 / 语言 / 内容 / 历史 / 外部核验）；正式 Word 只写老师认可意见 |
+| V0.6 | ✅ 已发布 | 教师确认门 + Review Session；四阶段工作台；有界第一轮初审（格式 / 语言 / 内容 / 历史 / 外部核验）；正式 Word 只写老师认可意见 |
 
 当前还没有完成：
 
