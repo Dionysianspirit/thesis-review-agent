@@ -137,7 +137,7 @@ def test_commit_review_writes_trace_without_quotes_or_body(tmp_path: Path):
 def test_trace_records_failed_nav_and_open_draft_resets(tmp_path: Path):
     worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
     _open(worker, sample_overclaim_draft())
-    for _unused in range(NAV_BUDGET):
+    for _unused in range(worker.nav_budget):
         worker.dispatch("list_outline", {})
     with pytest.raises(ReviewError):
         worker.dispatch("list_outline", {})
@@ -363,11 +363,12 @@ def test_record_argument_finding_accepts_real_quotes(tmp_path: Path):
 def test_nav_budget_then_only_record_or_commit(tmp_path: Path):
     worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
     _open(worker, sample_overclaim_draft())
-    for _unused in range(NAV_BUDGET):
+    for _unused in range(worker.nav_budget):
         worker.dispatch("list_outline", {})
     with pytest.raises(ReviewError) as caught:
         worker.dispatch("list_outline", {})
     assert caught.value.code == "nav_budget"
+    assert str(worker.nav_budget) in str(caught.value)
     with pytest.raises(ReviewError):
         worker.dispatch("read_section", {"start_ordinal": 1})
     recorded = worker.dispatch(
@@ -428,3 +429,29 @@ def test_worker_prefers_authoritative_draft_over_model_params(tmp_path: Path):
     findings = json.loads(Path(committed["findings_path"]).read_text(encoding="utf-8"))
     assert findings
     assert all(item["draft_id"] == draft_id for item in findings)
+
+
+def test_nav_budget_scales_with_long_draft_and_reports_nav_left(tmp_path: Path):
+    from docx import Document
+
+    from tests.helpers import _save
+
+    doc = Document()
+    doc.add_paragraph("本科毕业论文")
+    for index in range(340):
+        doc.add_paragraph(f"第{index}段：本研究围绕热点舆情展开分析。")
+    data = _save(doc)
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
+    opened = worker.dispatch("open_draft", {"bytes_b64": base64.b64encode(data).decode("ascii")})
+    assert opened["n_paragraphs"] >= 340
+    # 20 reads x 8 paragraphs cannot cover a 340-paragraph thesis; the budget
+    # grows with the draft (43 here) instead of cutting the agent off mid-paper.
+    assert worker.nav_budget == 43
+    assert opened["nav_budget"] == 43
+    first = worker.dispatch("list_outline", {})
+    assert first["nav_left"] == 42
+    second = worker.dispatch("read_paragraphs", {"start_ordinal": 1})
+    assert second["nav_left"] == 41
+    hits = worker.dispatch("find_text", {"needle": "热点舆情"})
+    assert "nav_left" in hits
+    assert hits["nav_left"] == 40

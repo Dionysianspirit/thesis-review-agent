@@ -42,6 +42,7 @@ LIVE_FINDING_OPS = frozenset(
     }
 )
 NAV_BUDGET = 20
+NAV_BUDGET_MAX = 60
 SEARCH_BUDGET = 3
 TRACE_PARAM_KEYS = frozenset({"start_ordinal", "limit", "max_hits", "draft_id", "issue_id", "subtype", "kind"})
 MAX_READ_PARAS = 8
@@ -102,6 +103,7 @@ class Worker:
         self.original: bytes = b""
         self.findings: list[Finding] = []
         self.nav_calls = 0
+        self.nav_budget = NAV_BUDGET
         self.search_calls = 0
         self.content_count = 0
         self.argument_count = 0
@@ -111,8 +113,11 @@ class Worker:
     def dispatch(self, op: str, params: dict) -> dict:
         try:
             if op in NAV_OPS:
-                if self.nav_calls >= NAV_BUDGET:
-                    raise ReviewError("nav_budget", "导航次数已达上限，只能记录发现或提交审改。")
+                if self.nav_calls >= self.nav_budget:
+                    raise ReviewError(
+                        "nav_budget",
+                        f"导航次数已达上限（共 {self.nav_budget} 次），只能记录发现或提交审改。",
+                    )
                 self.nav_calls += 1
             handler = getattr(self, f"op_{op}", None)
             if handler is None:
@@ -221,6 +226,7 @@ class Worker:
         self.opened = self.adapter.open_bytes(data)
         self.findings = []
         self.nav_calls = 0
+        self.nav_budget = NAV_BUDGET
         self.search_calls = 0
         self.content_count = 0
         self.argument_count = 0
@@ -228,7 +234,8 @@ class Worker:
         self.trace = []
         reset_live(self.live)
         paragraphs = self.adapter.list_paragraphs(self.opened)
-        return {"n_paragraphs": len(paragraphs)}
+        self.nav_budget = _nav_budget_for(len(paragraphs))
+        return {"n_paragraphs": len(paragraphs), "nav_budget": self.nav_budget}
 
     def op_report_intent(self, params: dict) -> dict:
         message = str(params.get("message") or params.get("intent") or "").strip()
@@ -388,14 +395,14 @@ class Worker:
                     "text": item.text[:OUTLINE_TEXT_LIMIT],
                 }
             )
-        return {"outline": outline}
+        return {"outline": outline, "nav_left": self._nav_left()}
 
     def op_read_paragraphs(self, params: dict) -> dict:
         start = _require_ordinal(params)
         limit = int(params.get("limit") or MAX_READ_PARAS)
         selected = [item for item in self._paragraphs() if item.ordinal >= start]
         paragraphs, truncated = _clip_paragraphs(selected, limit=limit)
-        return {"paragraphs": paragraphs, "truncated": truncated}
+        return {"paragraphs": paragraphs, "truncated": truncated, "nav_left": self._nav_left()}
 
     def op_read_section(self, params: dict) -> dict:
         start = _require_ordinal(params)
@@ -415,7 +422,7 @@ class Worker:
             if item.ordinal >= start and (end is None or item.ordinal < end)
         ]
         paragraphs, truncated = _clip_paragraphs(selected, limit=limit)
-        return {"paragraphs": paragraphs, "truncated": truncated}
+        return {"paragraphs": paragraphs, "truncated": truncated, "nav_left": self._nav_left()}
 
     def op_find_text(self, params: dict) -> dict:
         needle = str(params.get("needle") or "").strip()
@@ -438,7 +445,7 @@ class Worker:
             )
             if len(hits) >= max_hits:
                 break
-        return {"hits": hits}
+        return {"hits": hits, "nav_left": self._nav_left()}
 
     def op_web_search(self, params: dict) -> dict:
         if self.search_calls >= SEARCH_BUDGET:
@@ -623,6 +630,9 @@ class Worker:
             raise ReviewError("not_open", "尚未打开稿件。")
         return self.opened
 
+    def _nav_left(self) -> int:
+        return max(0, self.nav_budget - self.nav_calls)
+
     def _draft_id(self, params: dict) -> str:
         """Authoritative draft id from the parent, else the model-supplied one."""
         return self.draft_id or str(params.get("draft_id") or "new")
@@ -651,6 +661,13 @@ class Worker:
         if _paragraph_with_quote(quote, self._original_paragraphs()) is not None:
             return True
         return self._paragraph_with_quote(quote) is not None
+
+
+def _nav_budget_for(n_paragraphs: int) -> int:
+    """A thesis longer than the default budget can cover must get more reads:
+    NAV_BUDGET * MAX_READ_PARAS paragraphs is the floor, capped for cost."""
+    full_reads = (n_paragraphs + MAX_READ_PARAS - 1) // MAX_READ_PARAS
+    return max(NAV_BUDGET, min(NAV_BUDGET_MAX, full_reads))
 
 
 def _safe_trace_params(params: dict) -> dict:
