@@ -17,6 +17,8 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     assert "ensure_docx_layout" in packager
     windows = (ROOT / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
     assert "pyinstaller_build.py" in windows
+    assert "rename_dist.py" in windows
+    assert "LASTEXITCODE" in windows
     smoke = (ROOT / "scripts" / "smoke_packaged_demo.py").read_text(encoding="utf-8")
     assert "pyinstaller_build" in smoke
     assert "teacher-gate.json" in smoke
@@ -54,6 +56,12 @@ def test_readme_does_not_ship_v04_as_v06():
     assert "论文审改助手.exe" in text
     # Latest GitHub Release is still V0.4; do not send teachers there as V0.6.
     assert "](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)" not in text
+
+
+def test_rename_dist_survives_windows_console_encoding():
+    text = (ROOT / "scripts" / "rename_dist.py").read_text(encoding="utf-8")
+    assert "UnicodeEncodeError" in text
+    assert "论文审改助手" in text
 
 
 def test_word_engine_traces_frozen_stdlib_deps():

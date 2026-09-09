@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Python)) {
@@ -76,4 +78,9 @@ if ([int]$GatePayload.n_exported -lt 1 -or [int]$GatePayload.comments_after -lt 
 Write-Output "Built $Exe"
 Write-Output "Demo findings: $($Findings.FullName)"
 Write-Output "Teacher-gate comments: $($GatePayload.comments_after) exported=$($GatePayload.n_exported)"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 & $Python (Join-Path $Root "scripts\rename_dist.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "rename_dist.py failed with exit $LASTEXITCODE"
+}
