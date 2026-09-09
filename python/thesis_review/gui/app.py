@@ -13,8 +13,10 @@ from thesis_review.worker import main as worker_main
 from thesis_review.fixtures import write_demo_drafts
 from thesis_review.live import live_dir, read_progress, reset_live
 from thesis_review.paths import app_home, gui_dir
-from thesis_review.service import ThesisReviewService
+from thesis_review.service import ThesisReviewService, session_stats
+from thesis_review.session_store import ReviewSession
 from thesis_review.settings import AppSettings, apply_model, load_settings, public_settings, save_settings
+from thesis_review.types import Finding, derive_kind
 
 
 class Bridge:
@@ -24,8 +26,10 @@ class Bridge:
         self.settings: AppSettings = load_settings(home)
         self.window = None
         self.reviewed_path = ""
+        self.source_path = ""
+        self.paper_path = ""
         self.output_dir = str(self._default_output())
-        self._restore_session()
+        self.session: ReviewSession | None = None
         self.status = "准备就绪。"
         self.findings: list[dict] = []
         self.recall: dict = self._empty_recall()
@@ -36,6 +40,7 @@ class Bridge:
         self._review_done = False
         self._review_error = ""
         self._lock = threading.Lock()
+        self._restore_session()
 
     @staticmethod
     def _empty_recall() -> dict:
@@ -50,16 +55,24 @@ class Bridge:
             )
         ]
         payload = public_settings(self.settings)
+        session = self._session_payload()
         payload.update(
             {
                 "issues": issues,
                 "reviewed_path": self.reviewed_path,
+                "source_path": self.source_path,
+                "paper_path": self.paper_path or self.settings.last_paper_path,
                 "output_dir": self.output_dir,
                 "status": self.status,
                 "findings": self.findings,
                 "recall": self.recall,
                 "used_model": self.used_model,
                 "warning": self.warning,
+                "session": session,
+                "sessions": [item.to_dict() for item in self.service.sessions.list_recent(teacher_id=self.settings.teacher_id, limit=8)],
+                "history_drafts": [asdict(item) for item in self.service.sessions.list_history_drafts(teacher_id=self.settings.teacher_id, student_id=self.settings.student_id)],
+                "stats": session_stats([Finding.from_dict(item) if isinstance(item, dict) else item for item in self.findings]) if self.findings else session_stats([]),
+                "stage": self._stage(),
             }
         )
         return payload
@@ -67,6 +80,7 @@ class Bridge:
     def save_identity(self, payload: dict) -> dict:
         self.settings.teacher_name = str(payload.get("teacher_name") or self.settings.teacher_name)
         self.settings.student_id = str(payload.get("student_id") or self.settings.student_id).strip()
+        self.settings.student_name = str(payload.get("student_name") or self.settings.student_name)
         self.settings.major = str(payload.get("major") or self.settings.major)
         if not self.settings.teacher_id:
             self.settings.teacher_id = "teacher-a"
@@ -84,16 +98,24 @@ class Bridge:
         if not files:
             return {"ok": False, "message": "未选择文件。"}
         count = 0
+        missing = []
         for index, path in enumerate(files, start=1):
+            target = Path(path)
+            if not target.is_file():
+                missing.append(str(target))
+                continue
             self.service.ingest_history(
                 teacher_id=self.settings.teacher_id,
                 student_id=self.settings.student_id,
                 major=self.settings.major,
-                draft_id=Path(path).stem or f"history-{index}",
-                data=Path(path).read_bytes(),
+                draft_id=target.stem or f"history-{index}",
+                data=target.read_bytes(),
+                source_path=str(target),
             )
             count += 1
-        self.status = f"已导入 {count} 份历史稿，请确认问题。"
+        self.status = f"已导入 {count} 份历史稿，问题已保存。历史稿只是辅助材料。"
+        if missing:
+            self.status += f" 有 {len(missing)} 个文件无法读取。"
         return {"ok": True, "message": self.status}
 
     def load_demo(self) -> dict:
@@ -104,6 +126,8 @@ class Bridge:
         save_settings(self.home, self.settings)
         for draft_id, path in drafts.items():
             if draft_id == "new":
+                self.paper_path = str(path)
+                self.settings.last_paper_path = str(path)
                 continue
             self.service.ingest_history(
                 teacher_id=self.settings.teacher_id,
@@ -111,8 +135,10 @@ class Bridge:
                 major=self.settings.major,
                 draft_id=draft_id,
                 data=path.read_bytes(),
+                source_path=str(path),
             )
-        self.status = "已载入小周的演示稿。请确认历史问题后审查 new.docx。"
+        save_settings(self.home, self.settings)
+        self.status = "已载入演示稿。请确认需要复查的历史问题，再开始 AI 初审。"
         return {"ok": True, "message": self.status}
 
     def set_issue(self, issue_id: str, confirmed: bool) -> dict:
@@ -130,17 +156,42 @@ class Bridge:
             )
         return {"ok": True}
 
+    def choose_paper(self) -> dict:
+        files = self._pick(multiple=False)
+        if not files:
+            return {"ok": False, "message": "未选择新稿。"}
+        path = Path(files[0])
+        self.paper_path = str(path)
+        self.settings.last_paper_path = str(path)
+        save_settings(self.home, self.settings)
+        self.status = f"已选择当前新稿：{path.name}"
+        return {"ok": True, "message": self.status, "paper_path": str(path)}
+
     def review_file(self) -> dict:
         with self._lock:
             if self._reviewing:
                 return {"ok": False, "started": False, "message": "正在审查，请稍候。"}
-        files = self._pick(multiple=False)
+        paper = self.paper_path or self.settings.last_paper_path
+        files = [paper] if paper and Path(paper).is_file() else self._pick(multiple=False)
         if not files:
             return {"ok": False, "started": False, "message": "未选择新稿。"}
         path = Path(files[0])
+        if not path.is_file():
+            return {"ok": False, "started": False, "message": f"找不到稿件：{path}。已经提取的历史问题仍保留。"}
         data = path.read_bytes()
         output_dir = self._default_output()
         live = live_dir(output_dir)
+        session = self.service.start_session(
+            teacher_id=self.settings.teacher_id,
+            student_id=self.settings.student_id,
+            major=self.settings.major,
+            draft_id=path.stem or "new",
+            paper_path=str(path),
+            settings=self.settings,
+            teacher_name=self.settings.teacher_name,
+            student_name=self.settings.student_name,
+            output_dir=str(output_dir),
+        )
         with self._lock:
             if self._reviewing:
                 return {"ok": False, "started": False, "message": "正在审查，请稍候。"}
@@ -152,15 +203,21 @@ class Bridge:
             self.recall = self._empty_recall()
             self.warning = ""
             self.used_model = False
-            self.status = "正在初筛新稿…"
+            self.reviewed_path = ""
+            self.paper_path = str(path)
+            self.session = session
+            self.status = "AI 正在初审…"
             self.output_dir = str(output_dir)
         reset_live(live)
+        self.settings.last_paper_path = str(path)
+        self.settings.last_session_id = session.id
+        save_settings(self.home, self.settings)
         threading.Thread(
             target=self._run_review,
-            args=(path, data, output_dir),
+            args=(path, data, output_dir, session),
             daemon=True,
         ).start()
-        return {"ok": True, "started": True, "message": "已开始初筛。"}
+        return {"ok": True, "started": True, "message": "已开始 AI 初审。", "session_id": session.id}
 
     def progress(self) -> dict:
         with self._lock:
@@ -175,13 +232,18 @@ class Bridge:
             reviewed_path = self.reviewed_path
             status = self.status
             output = self.output_dir
+            paper_path = self.paper_path
+            source_path = self.source_path
+            session = self._session_payload()
+            stage = self._stage()
         payload = read_progress(live)
         live_findings = payload.get("findings") or []
         if not done and live_findings:
-            findings = live_findings
+            findings = self._merge_findings(live_findings, findings)
         message = payload.get("message") or status
         if done and status:
             message = status
+        stats = session_stats([Finding.from_dict(item) for item in findings]) if findings else session_stats([])
         return {
             "ok": not bool(error),
             "started": reviewing or done,
@@ -191,14 +253,79 @@ class Bridge:
             "findings": findings,
             "tech_log": payload.get("tech_log") or [],
             "reviewed_path": reviewed_path,
+            "source_path": source_path,
+            "paper_path": paper_path,
             "output_dir": output,
             "used_model": used_model,
             "recall": recall,
             "warning": warning,
             "status": status,
+            "session": session,
+            "stats": stats,
+            "stage": stage,
         }
 
-    def _run_review(self, path: Path, data: bytes, output_dir: Path) -> None:
+    def decide_finding(self, finding_id: str, decision: str, edited_text: str = "") -> dict:
+        session_id = self.session.id if self.session else self.settings.last_session_id
+        if not session_id:
+            return {"ok": False, "message": "没有可处理的审稿会话。"}
+        finding = self.service.decide_finding(
+            session_id=session_id,
+            finding_id=finding_id,
+            decision=decision,
+            edited_text=edited_text,
+        )
+        self.session = self.service.sessions.get(session_id)
+        self.findings = [item.to_dict() for item in self.session.findings]
+        self._persist_session()
+        return {"ok": True, "finding": finding.to_dict(), "stats": session_stats(self.session.findings)}
+
+    def accept_format_batch(self) -> dict:
+        session_id = self.session.id if self.session else self.settings.last_session_id
+        if not session_id:
+            return {"ok": False, "message": "没有可处理的审稿会话。"}
+        self.service.accept_format_findings(session_id)
+        self.session = self.service.sessions.get(session_id)
+        self.findings = [item.to_dict() for item in self.session.findings]
+        self._persist_session()
+        return {"ok": True, "stats": session_stats(self.session.findings)}
+
+    def export_final(self, allow_pending: bool = False) -> dict:
+        session_id = self.session.id if self.session else self.settings.last_session_id
+        if not session_id:
+            return {"ok": False, "message": "没有可导出的审稿会话。"}
+        result = self.service.export_final(session_id=session_id, allow_pending=bool(allow_pending))
+        if result.get("ok"):
+            self.reviewed_path = str(result.get("reviewed_path") or "")
+            self.session = self.service.sessions.get(session_id)
+            self.findings = [item.to_dict() for item in self.session.findings]
+            self.status = f"已生成正式审稿稿件，共写入 {result.get('n_exported', 0)} 条老师认可意见。"
+            if result.get("warning"):
+                self.status += result["warning"]
+            self._persist_session()
+        return result
+
+    def resume_session(self, session_id: str) -> dict:
+        try:
+            session = self.service.sessions.get(session_id)
+        except KeyError:
+            return {"ok": False, "message": "找不到该审稿会话。"}
+        self.session = session
+        self.findings = [item.to_dict() for item in session.findings]
+        self.paper_path = session.paper_path
+        self.source_path = session.source_path
+        self.output_dir = session.output_dir or self.output_dir
+        self.reviewed_path = session.final_output_path
+        self.warning = ""
+        self._review_done = session.status in {"awaiting_teacher", "completed"}
+        self._reviewing = False
+        self.status = "已恢复未完成的审稿会话。" if not session.completed else "已打开历史审稿会话。"
+        self.settings.last_session_id = session.id
+        self.settings.last_paper_path = session.paper_path
+        save_settings(self.home, self.settings)
+        return {"ok": True, "session": session.to_dict()}
+
+    def _run_review(self, path: Path, data: bytes, output_dir: Path, session: ReviewSession) -> None:
         confirmed = self.service.store.list_issues(
             teacher_id=self.settings.teacher_id,
             student_id=self.settings.student_id,
@@ -222,6 +349,8 @@ class Bridge:
                 output_dir=output_dir,
                 use_model=bool(self.settings.api_key),
                 settings=self.settings,
+                session=session,
+                paper_path=str(path),
             )
         except Exception as exc:  # noqa: BLE001 - surface to teachers
             with self._lock:
@@ -242,7 +371,7 @@ class Bridge:
             if result.warning:
                 reason = "模型审查未完成，按规则不把字符串命中写成复犯。"
             else:
-                reason = "在新稿中召回了相似原文，但未判定为复犯（可能已修复或依据不足），未写入批注。"
+                reason = "在新稿中召回了相似原文，但未判定为复犯（可能已修复或依据不足），未写入候选。"
             skipped.append(
                 {
                     "issue_id": hit.issue_id,
@@ -265,6 +394,10 @@ class Bridge:
             if issue.id not in recalled_ids
         ]
         extra = result.warning or ""
+        try:
+            session = self.service.sessions.get(result.session_id)
+        except KeyError:
+            session = self.session
         with self._lock:
             self.recall = {
                 "confirmed": len(confirmed),
@@ -276,9 +409,11 @@ class Bridge:
             self.findings = [item.to_dict() for item in result.findings]
             self.used_model = result.used_model
             self.warning = result.warning or ""
-            self.reviewed_path = str(result.reviewed_path)
+            self.source_path = result.source_path or str(output_dir / f"{path.stem}-source.docx")
+            self.reviewed_path = ""
             self.output_dir = str(output_dir)
-            self.status = f"完成，共 {len(result.findings)} 条建议。{extra}".strip()
+            self.session = session
+            self.status = f"AI 初审完成，{len(result.findings)} 条候选待老师处理。{extra}".strip()
             self._review_error = ""
             self._review_done = True
             self._reviewing = False
@@ -286,7 +421,7 @@ class Bridge:
 
     def open_reviewed(self) -> dict:
         if not self.reviewed_path:
-            return {"ok": False, "message": "还没有审改稿。"}
+            return {"ok": False, "message": "还没有正式审稿稿件。请先确认意见并生成。"}
         os.startfile(self.reviewed_path)  # type: ignore[attr-defined]
         return {"ok": True}
 
@@ -296,16 +431,75 @@ class Bridge:
         os.startfile(self.output_dir)  # type: ignore[attr-defined]
         return {"ok": True}
 
+    def _stage(self) -> str:
+        if self._reviewing:
+            return "reviewing"
+        if self.session and self.session.final_output_path:
+            return "export"
+        if self.findings or (self.session and self.session.findings):
+            return "decide"
+        return "prepare"
+
+    def _session_payload(self) -> dict | None:
+        if self.session is None:
+            return None
+        payload = self.session.to_dict()
+        payload["stats"] = session_stats(self.session.findings)
+        return payload
+
+    def _merge_findings(self, live_findings: list[dict], known: list[dict]) -> list[dict]:
+        by_id = {item.get("id"): item for item in known if item.get("id")}
+        merged = []
+        for item in live_findings:
+            current = dict(item)
+            prior = by_id.get(current.get("id"))
+            if prior and prior.get("teacher_decision") and prior.get("teacher_decision") != "pending":
+                current["teacher_decision"] = prior["teacher_decision"]
+                current["teacher_final_text"] = prior.get("teacher_final_text") or ""
+            current.setdefault("kind", derive_kind(current))
+            current.setdefault("teacher_decision", "pending")
+            merged.append(current)
+        return merged
+
     def _restore_session(self) -> None:
-        reviewed = self.settings.last_reviewed_path
-        if reviewed and Path(reviewed).is_file():
-            self.reviewed_path = reviewed
+        if self.settings.last_paper_path:
+            self.paper_path = self.settings.last_paper_path
         if self.settings.last_output_dir:
             self.output_dir = self.settings.last_output_dir
+        if self.settings.last_reviewed_path and Path(self.settings.last_reviewed_path).is_file():
+            self.reviewed_path = self.settings.last_reviewed_path
+        session_id = self.settings.last_session_id
+        if not session_id:
+            return
+        try:
+            session = self.service.sessions.get(session_id)
+        except KeyError:
+            return
+        self.session = session
+        self.findings = [item.to_dict() for item in session.findings]
+        self.source_path = session.source_path
+        if session.paper_path:
+            self.paper_path = session.paper_path
+        if session.output_dir:
+            self.output_dir = session.output_dir
+        if session.final_output_path:
+            self.reviewed_path = session.final_output_path
+        if session.findings:
+            self._review_done = True
+            self.status = "已恢复上次未完成的审稿会话。" if not session.completed else "已恢复上次审稿会话。"
 
     def _persist_session(self) -> None:
-        self.settings.last_reviewed_path = self.reviewed_path
-        self.settings.last_output_dir = self.output_dir
+        if self.session is not None:
+            self.settings.last_session_id = self.session.id
+            if self.session.paper_path:
+                self.settings.last_paper_path = self.session.paper_path
+            if self.session.final_output_path:
+                self.settings.last_reviewed_path = self.session.final_output_path
+            if self.session.output_dir:
+                self.settings.last_output_dir = self.session.output_dir
+        else:
+            self.settings.last_reviewed_path = self.reviewed_path
+            self.settings.last_output_dir = self.output_dir
         save_settings(self.home, self.settings)
 
     def _default_output(self) -> Path:
@@ -336,11 +530,11 @@ def start_gui() -> int:
     bridge = Bridge(home)
     html = gui_dir() / "ui.html"
     window = webview.create_window(
-        "论文审改助手",
+        "论文审稿助手",
         str(html),
         js_api=bridge,
-        width=1080,
-        height=780,
+        width=1180,
+        height=820,
         min_size=(880, 640),
     )
     bridge.window = window

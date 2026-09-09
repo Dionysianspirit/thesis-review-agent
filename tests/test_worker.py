@@ -18,7 +18,7 @@ from tests.helpers import (
 from thesis_review.errors import ReviewError
 from thesis_review.history.store import HistoryStore
 from thesis_review.service import ThesisReviewService
-from thesis_review.worker import Worker
+from thesis_review.worker import NAV_BUDGET, Worker
 from thesis_review.word.adapter import WordAdapter
 
 
@@ -137,7 +137,7 @@ def test_commit_review_writes_trace_without_quotes_or_body(tmp_path: Path):
 def test_trace_records_failed_nav_and_open_draft_resets(tmp_path: Path):
     worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
     _open(worker, sample_overclaim_draft())
-    for _unused in range(12):
+    for _unused in range(NAV_BUDGET):
         worker.dispatch("list_outline", {})
     with pytest.raises(ReviewError):
         worker.dispatch("list_outline", {})
@@ -228,11 +228,12 @@ def test_confirm_history_finding_accepts_real_quote(tmp_path: Path):
     finding = worker.findings[-1]
     assert finding.source == "history"
     assert finding.issue_id == issue_id
+    assert finding.teacher_decision == "pending"
     committed = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
     comments = WordAdapter().extract_comments(WordAdapter().open_path(committed["reviewed_path"]))
     blob = "\n".join(item.text for item in comments)
-    assert "历次" in blob or "已指出" in blob
-    assert hit["new_quote"] in blob
+    assert "历次" not in blob
+    assert hit["new_quote"] not in blob
 
 
 def test_confirm_history_finding_accepts_source_quote_after_rule_revision(tmp_path: Path):
@@ -350,17 +351,18 @@ def test_record_argument_finding_accepts_real_quotes(tmp_path: Path):
     assert finding.source == "argument"
     assert finding.code == "claim_without_evidence"
     assert finding.apply == "comment"
+    assert finding.teacher_decision == "pending"
     committed = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
     comments = WordAdapter().extract_comments(WordAdapter().open_path(committed["reviewed_path"]))
     blob = "\n".join(item.text for item in comments)
-    assert OVERCLAIM_CLAIM_QUOTE in blob
-    assert OVERCLAIM_EVIDENCE_QUOTE in blob
+    assert OVERCLAIM_CLAIM_QUOTE not in blob
+    assert OVERCLAIM_EVIDENCE_QUOTE not in blob
 
 
 def test_nav_budget_then_only_record_or_commit(tmp_path: Path):
     worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
     _open(worker, sample_overclaim_draft())
-    for _unused in range(12):
+    for _unused in range(NAV_BUDGET):
         worker.dispatch("list_outline", {})
     with pytest.raises(ReviewError) as caught:
         worker.dispatch("list_outline", {})

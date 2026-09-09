@@ -2,18 +2,46 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+import uuid
 from pathlib import Path
 
 from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
+from thesis_review.comments import comment_body as _comment_body
+from thesis_review.comments import export_accepted_docx
 from thesis_review.errors import ReviewError
 from thesis_review.history.ingest import issues_from_comments, issues_from_revisions, persist
 from thesis_review.history.match import match_issue
 from thesis_review.history.store import HistoryStore
 from thesis_review.live import append_event, live_dir, reset_live, write_findings
 from thesis_review.llm import model_available
+from thesis_review.quality import summarize_quality
+from thesis_review.session_store import (
+    HistoryDraftRecord,
+    ReviewSession,
+    SessionStore,
+    TeacherFeedback,
+    model_snapshot,
+    new_feedback_id,
+    new_session_id,
+    now_iso,
+)
 from thesis_review.settings import AppSettings, load_settings
-from thesis_review.types import Evidence, Finding, HistoryHit, IssueRecord, ReviewResult
+from thesis_review.types import (
+    DECISION_ACCEPTED,
+    DECISION_EDITED,
+    DECISION_PENDING,
+    DECISION_REJECTED,
+    Evidence,
+    Finding,
+    HistoryHit,
+    IssueRecord,
+    ReviewResult,
+    derive_kind,
+    is_exportable,
+    prepare_candidate,
+)
 from thesis_review.word.adapter import WordAdapter
 
 ASSISTANT_AUTHOR = "审改助手"
@@ -26,11 +54,13 @@ class ThesisReviewService:
         store: HistoryStore,
         adapter: WordAdapter | None = None,
         home: Path,
+        sessions: SessionStore | None = None,
     ) -> None:
         self.store = store
         self.adapter = adapter or WordAdapter()
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
+        self.sessions = sessions or SessionStore(self.home / "review-sessions.sqlite")
 
     def ingest_history(
         self,
@@ -40,6 +70,7 @@ class ThesisReviewService:
         major: str,
         draft_id: str,
         data: bytes,
+        source_path: str = "",
     ) -> list[IssueRecord]:
         opened = self.adapter.open_bytes(data)
         comments = issues_from_comments(
@@ -57,7 +88,20 @@ class ThesisReviewService:
             revisions=self.adapter.extract_revisions(opened),
             assistant_author=ASSISTANT_AUTHOR,
         )
-        return persist(self.store, comments + revisions)
+        records = persist(self.store, comments + revisions)
+        if source_path:
+            self.sessions.add_history_draft(
+                HistoryDraftRecord(
+                    id=uuid.uuid4().hex,
+                    teacher_id=teacher_id,
+                    student_id=student_id,
+                    draft_id=draft_id,
+                    path=source_path,
+                    imported_at=now_iso(),
+                    issue_count=len(records),
+                )
+            )
+        return records
 
     def confirm_issue(self, *, teacher_id: str, student_id: str, issue_id: str) -> IssueRecord:
         return self.store.set_status(
@@ -100,11 +144,48 @@ class ThesisReviewService:
         student_id: str,
         data: bytes,
         draft_id: str,
+        session_id: str = "",
     ) -> list[Finding]:
         hits = self.search_history(
             teacher_id=teacher_id, student_id=student_id, data=data
         )
-        return [_history_finding(hit, self.store.get(hit.issue_id), draft_id) for hit in hits]
+        findings = []
+        for hit in hits:
+            findings.append(
+                prepare_candidate(_history_finding(hit, self.store.get(hit.issue_id), draft_id), session_id=session_id)
+            )
+        return findings
+
+    def start_session(
+        self,
+        *,
+        teacher_id: str,
+        student_id: str,
+        major: str,
+        draft_id: str,
+        paper_path: str,
+        settings: AppSettings | None = None,
+        teacher_name: str = "",
+        student_name: str = "",
+        output_dir: str = "",
+    ) -> ReviewSession:
+        current = settings or load_settings(self.home)
+        session = ReviewSession(
+            id=new_session_id(),
+            teacher_id=teacher_id,
+            teacher_name=teacher_name or current.teacher_name,
+            student_id=student_id,
+            student_name=student_name or current.student_name,
+            major=major,
+            draft_id=draft_id,
+            paper_path=paper_path,
+            created_at=now_iso(),
+            updated_at=now_iso(),
+            status="reviewing",
+            model_snapshot=model_snapshot(current),
+            output_dir=output_dir,
+        )
+        return self.sessions.create(session)
 
     def review(
         self,
@@ -121,6 +202,8 @@ class ThesisReviewService:
         faux_scenario: str = "",
         pi_timeout: int = 180,
         offline_fallback: bool = True,
+        session: ReviewSession | None = None,
+        paper_path: str = "",
     ) -> ReviewResult:
         current = settings or load_settings(self.home)
         warning = ""
@@ -128,9 +211,23 @@ class ThesisReviewService:
         should_pi = faux or use_pi or semantic
         live = live_dir(output_dir)
         reset_live(live)
+        started = time.monotonic()
+        if session is None:
+            session = self.start_session(
+                teacher_id=teacher_id,
+                student_id=student_id,
+                major=current.major,
+                draft_id=draft_id,
+                paper_path=paper_path,
+                settings=current,
+                output_dir=str(output_dir),
+            )
+        else:
+            session.status = "reviewing"
+            self.sessions.save(session)
         if should_pi:
             try:
-                return self._review_with_pi(
+                result = self._review_with_pi(
                     teacher_id=teacher_id,
                     student_id=student_id,
                     draft_id=draft_id,
@@ -140,6 +237,16 @@ class ThesisReviewService:
                     faux=faux,
                     faux_scenario=faux_scenario,
                     timeout=pi_timeout,
+                    session_id=session.id,
+                )
+                return self._finish_review(
+                    session=session,
+                    result=result,
+                    original=data,
+                    output_dir=output_dir,
+                    draft_id=draft_id,
+                    started=started,
+                    warning=warning,
                 )
             except Exception as exc:  # noqa: BLE001 - fall back to offline rules
                 if not offline_fallback:
@@ -154,6 +261,7 @@ class ThesisReviewService:
         findings: list[Finding] = []
         findings.extend(check_language(paragraphs, draft_id=draft_id))
         findings.extend(check_format(paragraphs, tables, draft_id=draft_id))
+        findings = [prepare_candidate(item, session_id=session.id) for item in findings]
         append_event(live, {"op": "run_checks", "ok": True})
         write_findings(live, findings)
         if not (semantic and warning):
@@ -163,6 +271,7 @@ class ThesisReviewService:
                     student_id=student_id,
                     data=data,
                     draft_id=draft_id,
+                    session_id=session.id,
                 )
             )
             append_event(live, {"op": "get_history_candidates", "ok": True})
@@ -171,34 +280,12 @@ class ThesisReviewService:
         if use_model and not warning and not model_available(current):
             warning = "未配置模型密钥，已改用离线规则。"
 
-        for finding in findings:
-            if finding.apply in {"comment", "both"} and finding.anchor.startswith("P"):
-                try:
-                    self.adapter.add_comment(
-                        opened,
-                        anchor=finding.anchor,
-                        text=_comment_body(finding),
-                        author=ASSISTANT_AUTHOR,
-                    )
-                except ReviewError:
-                    continue
-        for finding in findings:
-            if finding.apply in {"revision", "both"} and finding.suggested_old and finding.suggested_new:
-                try:
-                    self.adapter.replace_tracked(
-                        opened,
-                        anchor=finding.anchor,
-                        old=finding.suggested_old,
-                        new=finding.suggested_new,
-                        author=ASSISTANT_AUTHOR,
-                    )
-                except ReviewError:
-                    continue
-
         output_dir.mkdir(parents=True, exist_ok=True)
+        source_path = output_dir / f"{draft_id}-source.docx"
         reviewed_path = output_dir / f"{draft_id}-reviewed.docx"
         findings_path = output_dir / f"{draft_id}-findings.json"
-        self.adapter.save(opened, reviewed_path)
+        source_path.write_bytes(data)
+        reviewed_path.write_bytes(data)
         findings_path.write_text(
             json.dumps([item.to_dict() for item in findings], ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -206,13 +293,167 @@ class ThesisReviewService:
         append_event(live, {"op": "commit_review", "ok": True})
         write_findings(live, findings)
         append_event(live, {"op": "done", "ok": True})
-        return ReviewResult(
+        result = ReviewResult(
             reviewed_path=reviewed_path,
             findings_path=findings_path,
             findings=findings,
             used_model=used_model,
             warning=warning,
+            session_id=session.id,
+            source_path=str(source_path),
         )
+        return self._finish_review(
+            session=session,
+            result=result,
+            original=data,
+            output_dir=output_dir,
+            draft_id=draft_id,
+            started=started,
+            warning=warning,
+        )
+
+    def _finish_review(
+        self,
+        *,
+        session: ReviewSession,
+        result: ReviewResult,
+        original: bytes,
+        output_dir: Path,
+        draft_id: str,
+        started: float,
+        warning: str,
+    ) -> ReviewResult:
+        findings = [prepare_candidate(item, session_id=session.id) for item in result.findings]
+        source_path = output_dir / f"{draft_id}-source.docx"
+        if not source_path.is_file():
+            source_path.write_bytes(original)
+        reviewed_path = output_dir / f"{draft_id}-reviewed.docx"
+        if not reviewed_path.is_file():
+            reviewed_path.write_bytes(original)
+        session.findings = findings
+        session.source_path = str(source_path)
+        session.output_dir = str(output_dir)
+        session.status = "awaiting_teacher"
+        session.quality = summarize_quality(
+            findings,
+            _load_trace(output_dir, draft_id),
+            duration_s=time.monotonic() - started,
+        )
+        self.sessions.save(session)
+        result.findings = findings
+        result.session_id = session.id
+        result.source_path = str(source_path)
+        result.quality = session.quality
+        result.warning = warning or result.warning
+        result.findings_path.write_text(
+            json.dumps([item.to_dict() for item in findings], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return result
+
+    def decide_finding(
+        self,
+        *,
+        session_id: str,
+        finding_id: str,
+        decision: str,
+        edited_text: str = "",
+    ) -> Finding:
+        if decision not in {DECISION_PENDING, DECISION_ACCEPTED, DECISION_REJECTED, DECISION_EDITED}:
+            raise ReviewError("invalid_decision", "不支持的老师决定。")
+        if decision == DECISION_EDITED and not edited_text.strip():
+            raise ReviewError("invalid_decision", "编辑后确认需要提供老师最终文本。")
+        finding = self.sessions.set_decision(
+            session_id=session_id,
+            finding_id=finding_id,
+            decision=decision,
+            edited_text=edited_text,
+        )
+        session = self.sessions.get(session_id)
+        self.sessions.add_feedback(
+            TeacherFeedback(
+                id=new_feedback_id(),
+                session_id=session_id,
+                finding_id=finding.id,
+                teacher_id=session.teacher_id,
+                student_id=session.student_id,
+                paper_path=session.paper_path,
+                section=finding.section,
+                decision=decision,
+                original_payload={
+                    "problem": finding.original_problem or finding.problem,
+                    "rationale": finding.original_rationale or finding.rationale,
+                    "quote": finding.quote,
+                    "kind": derive_kind(finding),
+                    "source": finding.source,
+                    "evidence": [item.__dict__ for item in finding.evidence],
+                },
+                edited_text=finding.teacher_final_text,
+                created_at=now_iso(),
+                kind=derive_kind(finding),
+                category=finding.category,
+                problem=finding.original_problem or finding.problem,
+            )
+        )
+        return finding
+
+    def accept_format_findings(self, session_id: str) -> list[Finding]:
+        session = self.sessions.get(session_id)
+        updated: list[Finding] = []
+        for item in session.findings:
+            if derive_kind(item) == "format" and item.teacher_decision == DECISION_PENDING:
+                self.decide_finding(session_id=session_id, finding_id=item.id, decision=DECISION_ACCEPTED)
+                updated.append(item)
+        return updated
+
+    def export_final(
+        self,
+        *,
+        session_id: str,
+        allow_pending: bool = False,
+        dest: Path | None = None,
+    ) -> dict:
+        session = self.sessions.get(session_id)
+        pending = [item for item in session.findings if item.teacher_decision == DECISION_PENDING]
+        if pending and not allow_pending:
+            return {
+                "ok": False,
+                "needs_confirm": True,
+                "pending": len(pending),
+                "message": f"仍有 {len(pending)} 条意见未处理。可继续处理，或仅使用当前已确认意见生成。",
+                "stats": session_stats(session.findings),
+            }
+        original_path = Path(session.source_path or session.paper_path)
+        if not original_path.is_file():
+            raise ReviewError("open_failed", "找不到本稿文件，无法生成正式审稿稿件。")
+        original = original_path.read_bytes()
+        output_dir = Path(session.output_dir or original_path.parent)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        reviewed_path = dest or (output_dir / f"{session.draft_id}-reviewed.docx")
+        export_accepted_docx(
+            adapter=self.adapter,
+            original=original,
+            findings=session.findings,
+            dest=reviewed_path,
+        )
+        session.final_output_path = str(reviewed_path)
+        session.completed = True
+        session.status = "completed"
+        session.quality = summarize_quality(session.findings, _load_trace(output_dir, session.draft_id))
+        self.sessions.save(session)
+        exported = [item for item in session.findings if is_exportable(item)]
+        warning = ""
+        if pending and allow_pending:
+            warning = f"已忽略 {len(pending)} 条未处理意见，仅写入老师已确认内容。"
+        return {
+            "ok": True,
+            "reviewed_path": str(reviewed_path),
+            "n_exported": len(exported),
+            "pending": len(pending),
+            "warning": warning,
+            "stats": session_stats(session.findings),
+            "quality": session.quality,
+        }
 
     def _review_with_pi(
         self,
@@ -226,6 +467,7 @@ class ThesisReviewService:
         faux: bool,
         faux_scenario: str = "",
         timeout: int = 180,
+        session_id: str = "",
     ) -> ReviewResult:
         from thesis_review.runtime import python_path, run_pi_review
 
@@ -248,6 +490,7 @@ class ThesisReviewService:
                 "python": sys.executable,
                 "pythonpath": python_path(),
                 "faux_scenario": faux_scenario,
+                "session_id": session_id,
             },
             faux=faux,
             timeout=timeout,
@@ -261,7 +504,41 @@ class ThesisReviewService:
             findings=findings,
             used_model=not faux,
             warning="",
+            session_id=session_id,
+            source_path=str(source),
         )
+
+
+def session_stats(findings: list) -> dict:
+    pending = accepted = edited = rejected = 0
+    for raw in findings:
+        item = raw if isinstance(raw, Finding) else Finding.from_dict(raw if isinstance(raw, dict) else {})
+        if item.teacher_decision == DECISION_ACCEPTED:
+            accepted += 1
+        elif item.teacher_decision == DECISION_EDITED:
+            edited += 1
+        elif item.teacher_decision == DECISION_REJECTED:
+            rejected += 1
+        else:
+            pending += 1
+    return {
+        "ai_candidates": len(findings),
+        "accepted": accepted,
+        "edited_accepted": edited,
+        "rejected": rejected,
+        "pending": pending,
+        "formal": accepted + edited,
+    }
+
+
+def _load_trace(output_dir: Path, draft_id: str) -> dict:
+    path = Path(output_dir) / f"{draft_id}-trace.json"
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Finding:
@@ -270,6 +547,7 @@ def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Find
         issue_id=hit.issue_id,
         category=issue.category,
         source="history",
+        kind="history",
         problem="学生在新稿中仍出现已确认的历史问题。",
         rationale=f"历次稿件已指出：{issue.original_text}",
         quote=hit.new_quote,
@@ -277,6 +555,8 @@ def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Find
         paragraph_index=hit.paragraph_index,
         apply="comment",
         draft_id=draft_id,
+        history_refs=[hit.issue_id],
+        suggested_action="请对照旧稿批注意图修改，并补上可核验的依据。",
         evidence=[
             Evidence(kind="history", draft_id=issue.source_draft_id, text=issue.original_text),
             Evidence(
@@ -286,26 +566,3 @@ def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Find
             ),
         ],
     )
-
-
-def _comment_body(finding: Finding) -> str:
-    lines = [finding.problem, finding.rationale]
-    if finding.source == "history":
-        comment = next((item.text for item in finding.evidence if item.kind == "history"), "")
-        old_span = next((item.text for item in finding.evidence if item.kind == "history_span"), "")
-        lines = [f"历次稿件已指出：{comment or finding.rationale}"]
-        if old_span:
-            lines.append(f"旧稿原文：「{old_span}」。")
-        if finding.quote:
-            lines.append(f"本稿对应位置：「{finding.quote}」。")
-        lines.append("请对照修改，并补上可核验的依据。")
-    elif finding.source == "argument":
-        evidence = next((item.text for item in finding.evidence if item.kind == "evidence"), "")
-        lines = [finding.problem, finding.rationale]
-        if finding.quote:
-            lines.append(f"主张：「{finding.quote}」。")
-        if evidence:
-            lines.append(f"对照证据：「{evidence}」。")
-    elif finding.suggested_new:
-        lines.append(f"建议将「{finding.suggested_old}」改为「{finding.suggested_new}」。")
-    return "\n".join(line for line in lines if line)

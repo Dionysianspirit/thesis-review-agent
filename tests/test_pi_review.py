@@ -70,8 +70,8 @@ def test_faux_overclaim_records_argument_finding(tmp_path: Path):
     assert all(item.code == "claim_without_evidence" for item in argument)
     comments = WordAdapter().extract_comments(WordAdapter().open_path(result.reviewed_path))
     blob = "\n".join(item.text for item in comments)
-    assert OVERCLAIM_CLAIM_QUOTE in blob
-    assert OVERCLAIM_EVIDENCE_QUOTE in blob
+    assert OVERCLAIM_CLAIM_QUOTE not in blob
+    assert OVERCLAIM_EVIDENCE_QUOTE not in blob
     trace_path = result.findings_path.with_name("overclaim-trace.json")
     assert trace_path.is_file()
     ops = [item["op"] for item in json.loads(trace_path.read_text(encoding="utf-8"))["ops"]]

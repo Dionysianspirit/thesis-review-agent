@@ -9,7 +9,7 @@ async function api(name, ...args) {
 function log(message, cls) {
   const node = $("log");
   node.textContent = message;
-  node.className = "log mono" + (cls ? " " + cls : "");
+  node.className = "live-message serif" + (cls ? " " + cls : "");
 }
 
 function setStatus(text, state) {
@@ -26,40 +26,52 @@ function esc(value) {
     .replace(/'/g, "&#39;");
 }
 
-/* ---------- grouping ---------- */
-
-const GROUPS = {
-  language: { label: "语言规则", chip: "A · 语言规则", cls: "" },
-  format: { label: "格式规则", chip: "C · 格式规则", cls: "" },
-  history: { label: "历史复犯", chip: "D · 历史复犯", cls: "chip-history" },
-  argument: { label: "论证取证", chip: "B · 论证取证", cls: "chip-argument" },
+const KIND_META = {
+  format: { label: "格式", chip: "格式" },
+  language: { label: "语言", chip: "语言" },
+  content: { label: "内容", chip: "内容" },
+  history: { label: "历史", chip: "历史复查" },
+  external: { label: "外部核验", chip: "外部核验" },
 };
 
-function groupOf(finding) {
-  if (finding.source === "history") return "history";
-  if (finding.source === "argument") return "argument";
-  return finding.category === "C" ? "format" : "language";
-}
+const DECISION_LABELS = {
+  pending: "待处理",
+  accepted: "已确认",
+  edited_accepted: "已修改确认",
+  rejected: "已驳回",
+};
 
-const APPLY_LABELS = { comment: "批注", revision: "修订", both: "批注 + 修订" };
+const APPLY_LABELS = { comment: "拟写批注", revision: "拟写修订", both: "拟写批注 + 修订" };
 
 const EVIDENCE_LABELS = {
   history: "历次批注",
   history_span: "旧稿原文",
-  claim: "主张原文",
+  claim: "论文原文",
   evidence: "对照证据",
+  counter: "反证",
+  rule: "规则依据",
 };
 
-/* ---------- issues (step 2) ---------- */
-
 const STATUS_LABELS = { candidate: "待确认", confirmed: "已确认", disabled: "已停用" };
+
+function kindOf(finding) {
+  if (finding.kind) return finding.kind;
+  if (finding.source === "history") return "history";
+  if (finding.source === "external") return "external";
+  if (finding.source === "argument") return "content";
+  return finding.category === "C" ? "format" : finding.category === "B" ? "content" : "language";
+}
+
+function decisionOf(finding) {
+  return finding.teacher_decision || "pending";
+}
 
 function renderIssues(issues) {
   const box = $("issues");
   box.innerHTML = "";
   if (!issues.length) {
     box.className = "issues empty";
-    box.textContent = "还没有历史问题。先导入历史稿，或载入演示稿。";
+    box.textContent = "还没有历史问题。需要时再导入历史稿。";
     return;
   }
   box.className = "issues";
@@ -91,92 +103,118 @@ function renderIssues(issues) {
   });
 }
 
-/* ---------- findings (results layer) ---------- */
+function renderDrafts(drafts) {
+  const box = $("history-drafts");
+  if (!drafts || !drafts.length) {
+    box.className = "draft-list empty";
+    box.textContent = "还没有已保存的历史稿记录。";
+    return;
+  }
+  box.className = "draft-list";
+  box.innerHTML = drafts.map((item) => {
+    const access = item.accessible ? "文件可访问" : "原文件找不到，已提取问题仍保留";
+    return `<div class="draft-item"><strong>${esc(item.draft_id)}</strong><span class="mono">${esc(item.path || "（无路径）")}</span><span>${esc(access)} · ${item.issue_count || 0} 条问题</span></div>`;
+  }).join("");
+}
+
+function renderSessions(sessions) {
+  const box = $("sessions");
+  if (!sessions || !sessions.length) {
+    box.className = "session-list empty";
+    box.textContent = "还没有审稿会话。";
+    return;
+  }
+  box.className = "session-list";
+  box.innerHTML = sessions.map((item) => {
+    const label = item.completed ? "已完成" : "未完成";
+    return `<button class="session-item" type="button" data-id="${esc(item.id)}"><span>${esc(item.student_id)} · ${esc(item.draft_id)}</span><span class="mono">${esc(label)}</span></button>`;
+  }).join("");
+  box.querySelectorAll("button[data-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!hasBridge()) return;
+      await api("resume_session", btn.dataset.id);
+      await refresh();
+    });
+  });
+}
 
 let lastFindings = [];
 let lastRecall = { confirmed: 0, recalled: 0, written: 0, skipped: [], absent: [] };
-let activeTab = "all";
+let lastStats = { ai_candidates: 0, accepted: 0, edited_accepted: 0, rejected: 0, pending: 0, formal: 0 };
+let decisionTab = "pending";
+let kindTab = "all";
 
 function findingCard(finding) {
-  const group = groupOf(finding);
-  const meta = GROUPS[group];
-  const apply = APPLY_LABELS[finding.apply] || "批注";
-  const loc = finding.paragraph_index
-    ? `第 ${finding.paragraph_index} 段 · ${finding.anchor || ""}`
-    : (finding.anchor || "");
-  const quote = finding.quote
-    ? `<blockquote class="quote">「${esc(finding.quote)}」</blockquote>`
+  const kind = kindOf(finding);
+  const meta = KIND_META[kind] || KIND_META.content;
+  const decision = decisionOf(finding);
+  const loc = finding.section
+    ? `${finding.section} · ${finding.anchor || ""}`
+    : (finding.paragraph_index ? `第 ${finding.paragraph_index} 段 · ${finding.anchor || ""}` : (finding.anchor || ""));
+  const quote = finding.quote ? `<blockquote class="quote">「${esc(finding.quote)}」</blockquote>` : "";
+  const evidence = (finding.evidence || []).map((item) => {
+    const evKind = EVIDENCE_LABELS[item.kind] || item.kind || "依据";
+    const draft = item.draft_id ? ` · ${item.draft_id}` : "";
+    return `<div class="ev-item"><span class="ev-kind">${esc(evKind)}${esc(draft)}</span><span>${esc(item.text)}</span></div>`;
+  }).join("");
+  const sources = (finding.external_sources || []).map((item) => {
+    return `<div class="ev-item"><span class="ev-kind">外部来源</span><span>${esc(item.title || "")} ${esc(item.url || "")}</span></div>`;
+  }).join("");
+  const history = (finding.history_refs || []).length
+    ? `<div class="ev-item"><span class="ev-kind">历史参考</span><span>${esc((finding.history_refs || []).join("，"))}</span></div>`
     : "";
-  const evidence = (finding.evidence || [])
-    .map((item) => {
-      const kind = EVIDENCE_LABELS[item.kind] || item.kind || "依据";
-      const draft = item.draft_id ? ` · ${item.draft_id}` : "";
-      return `<div class="ev-item"><span class="ev-kind">${esc(kind)}${esc(draft)}</span><span>${esc(item.text)}</span></div>`;
-    })
-    .join("");
-  const evidenceBlock = evidence ? `<div class="evidence">${evidence}</div>` : "";
+  const original = finding.original_problem && finding.original_problem !== finding.problem
+    ? `<p class="rationale">AI 原意见：${esc(finding.original_problem)}</p>`
+    : "";
+  const teacherText = finding.teacher_final_text
+    ? `<p class="rationale">老师最终文本：${esc(finding.teacher_final_text)}</p>`
+    : "";
   const suggest = finding.suggested_old && finding.suggested_new
     ? `<div class="suggest">建议将 <span class="old">「${esc(finding.suggested_old)}」</span> 改为 <span class="new">「${esc(finding.suggested_new)}」</span></div>`
-    : "";
+    : (finding.suggested_action ? `<div class="suggest">${esc(finding.suggested_action)}</div>` : "");
+  const subtype = finding.subtype ? ` · ${finding.subtype}` : "";
+  const editValue = finding.teacher_final_text || finding.problem || "";
   return `
-    <article class="finding" data-group="${group}">
+    <article class="finding decision-${esc(decision)}" data-kind="${esc(kind)}" data-decision="${esc(decision)}" data-id="${esc(finding.id)}">
       <div class="finding-head">
-        <span class="chip ${meta.cls}">${meta.chip}</span>
+        <span class="chip">${esc(meta.chip)}${esc(subtype)}</span>
         <span class="loc">${esc(loc)}</span>
-        <span class="apply-badge">写入：${esc(apply)}</span>
+        <span class="apply-badge">${esc(DECISION_LABELS[decision] || decision)}</span>
       </div>
       <h4>${esc(finding.problem)}</h4>
       <p class="rationale">${esc(finding.rationale)}</p>
+      ${original}
       ${quote}
-      ${evidenceBlock}
+      ${evidence || sources || history ? `<div class="evidence">${evidence}${sources}${history}</div>` : ""}
       ${suggest}
+      ${teacherText}
+      <p class="source-line mono">来源：${esc(finding.source || "")} · ${esc(APPLY_LABELS[finding.apply] || "拟写批注")}</p>
+      <div class="finding-actions">
+        <button class="btn btn-dark" data-act="accepted" type="button">确认</button>
+        <button class="btn btn-ghost" data-act="rejected" type="button">驳回</button>
+        <button class="btn btn-ghost" data-act="edited_accepted" type="button">编辑后确认</button>
+      </div>
+      <textarea class="edit-box" placeholder="老师最终审稿意见">${esc(editValue)}</textarea>
     </article>`;
 }
 
-function skippedCard(item, kindLabel) {
-  const quote = item.new_quote
-    ? `<blockquote class="quote">本稿召回：「${esc(item.new_quote)}」</blockquote>`
-    : "";
-  return `
-    <article class="finding skipped" data-group="skipped">
-      <div class="finding-head">
-        <span class="chip chip-skipped">${esc(kindLabel)}</span>
-        <span class="loc">历史问题 ${esc(item.issue_id)}</span>
-        <span class="apply-badge">未写入</span>
-      </div>
-      <h4>${esc(item.problem)}</h4>
-      <div class="evidence">
-        <div class="ev-item"><span class="ev-kind">历次批注</span><span>${esc(item.original_text)}</span></div>
-      </div>
-      ${quote}
-      <p class="skip-reason">${esc(item.reason)}</p>
-    </article>`;
-}
-
-function renderResults(findings, recall, usedModel, warning) {
+function renderResults(findings, recall, usedModel, warning, stats) {
   lastFindings = findings || [];
   lastRecall = recall || lastRecall;
+  lastStats = stats || countsFrom(lastFindings);
   const has = lastFindings.length || (lastRecall.skipped || []).length || (lastRecall.absent || []).length;
   $("results-empty").hidden = Boolean(has);
   $("results").hidden = !has;
-  if (!has) return;
-
-  const counts = { language: 0, format: 0, history: 0, argument: 0 };
-  for (const f of lastFindings) counts[groupOf(f)] += 1;
-  const skippedCount = (lastRecall.skipped || []).length + (lastRecall.absent || []).length;
-  $("count-all").textContent = lastFindings.length;
-  $("count-language").textContent = counts.language;
-  $("count-format").textContent = counts.format;
-  $("count-history").textContent = counts.history;
-  $("count-argument").textContent = counts.argument;
-  $("count-skipped").textContent = skippedCount;
-
+  $("count-pending").textContent = lastStats.pending || 0;
+  $("count-accepted").textContent = lastStats.accepted || 0;
+  $("count-edited").textContent = lastStats.edited_accepted || 0;
+  $("count-rejected").textContent = lastStats.rejected || 0;
+  $("count-all").textContent = lastStats.ai_candidates || lastFindings.length;
   const badge = $("mode-badge");
   badge.textContent = usedModel ? "模型辅助" : "离线规则";
   badge.className = "mode-badge mono" + (usedModel ? " model" : "");
   $("recall-line").textContent =
-    `已确认历史问题 ${lastRecall.confirmed} · 召回 ${lastRecall.recalled} · 写成复犯 ${lastRecall.written}`;
-
+    `已确认历史问题 ${lastRecall.confirmed || 0} · 召回 ${lastRecall.recalled || 0} · 写成候选 ${lastRecall.written || 0}`;
   const banner = $("warning-banner");
   if (warning) {
     banner.textContent = warning;
@@ -184,46 +222,100 @@ function renderResults(findings, recall, usedModel, warning) {
   } else {
     banner.hidden = true;
   }
+  renderExportStats(lastStats);
+  if (!has) return;
   renderTab();
+}
+
+function countsFrom(findings) {
+  const stats = { ai_candidates: findings.length, accepted: 0, edited_accepted: 0, rejected: 0, pending: 0, formal: 0 };
+  for (const item of findings) {
+    const decision = decisionOf(item);
+    stats[decision] = (stats[decision] || 0) + 1;
+  }
+  stats.formal = (stats.accepted || 0) + (stats.edited_accepted || 0);
+  return stats;
+}
+
+function renderExportStats(stats) {
+  const current = stats || lastStats;
+  $("export-stats").textContent =
+    `AI 候选：${current.ai_candidates || 0}　老师确认：${current.accepted || 0}　编辑后确认：${current.edited_accepted || 0}　驳回：${current.rejected || 0}　未处理：${current.pending || 0}　正式采用：${current.formal || 0}`;
+  const canExport = (current.accepted || 0) + (current.edited_accepted || 0) > 0 || (current.ai_candidates || 0) > 0;
+  $("btn-export").disabled = !canExport;
+  $("btn-export-confirmed").disabled = !canExport;
 }
 
 function renderTab() {
   const box = $("findings");
-  const parts = [];
-  if (activeTab === "skipped") {
-    for (const item of lastRecall.skipped || []) {
-      parts.push(skippedCard(item, "召回未确认"));
-    }
-    for (const item of lastRecall.absent || []) {
-      parts.push(skippedCard(item, "本次未命中"));
-    }
-    if (!parts.length) {
-      parts.push(`<div class="card placeholder">没有未写入的条目。召回的历史问题均已确认并写入。</div>`);
-    }
-  } else {
-    const selected = activeTab === "all"
-      ? lastFindings
-      : lastFindings.filter((f) => groupOf(f) === activeTab);
-    if (!selected.length) {
-      parts.push(`<div class="card placeholder">该分组下没有命中。</div>`);
-    } else {
-      for (const f of selected) parts.push(findingCard(f));
-    }
+  const selected = lastFindings.filter((item) => {
+    const decision = decisionOf(item);
+    const kind = kindOf(item);
+    if (decision !== decisionTab) return false;
+    if (kindTab !== "all" && kind !== kindTab) return false;
+    return true;
+  });
+  if (!selected.length) {
+    box.innerHTML = `<div class="card placeholder">该筛选下没有候选意见。</div>`;
+    return;
   }
-  box.innerHTML = parts.join("");
+  box.innerHTML = selected.map(findingCard).join("");
+  box.querySelectorAll(".finding").forEach((card) => {
+    card.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.addEventListener("click", () => onDecide(card.dataset.id, btn.dataset.act, card.querySelector(".edit-box").value));
+    });
+  });
 }
 
-$("tabs").addEventListener("click", (event) => {
+async function onDecide(id, decision, editedText) {
+  if (!hasBridge()) {
+    const item = lastFindings.find((finding) => finding.id === id);
+    if (item) {
+      item.teacher_decision = decision;
+      if (decision === "edited_accepted") item.teacher_final_text = editedText;
+      lastStats = countsFrom(lastFindings);
+      renderResults(lastFindings, lastRecall, false, "", lastStats);
+    }
+    return;
+  }
+  const result = await api("decide_finding", id, decision, editedText || "");
+  if (result && result.ok) {
+    await refresh();
+  } else {
+    log((result && result.message) || "未能保存老师决定。", "err");
+  }
+}
+
+$("decision-tabs").addEventListener("click", (event) => {
   const btn = event.target.closest(".tab");
   if (!btn) return;
-  activeTab = btn.dataset.tab;
-  document.querySelectorAll("#tabs .tab").forEach((tab) => {
-    tab.classList.toggle("active", tab === btn);
-  });
+  decisionTab = btn.dataset.decision;
+  document.querySelectorAll("#decision-tabs .tab").forEach((tab) => tab.classList.toggle("active", tab === btn));
   renderTab();
 });
 
-/* ---------- state sync ---------- */
+$("type-tabs").addEventListener("click", (event) => {
+  const btn = event.target.closest(".tab");
+  if (!btn) return;
+  kindTab = btn.dataset.kind;
+  document.querySelectorAll("#type-tabs .tab").forEach((tab) => tab.classList.toggle("active", tab === btn));
+  renderTab();
+});
+
+function setStage(stage) {
+  document.body.classList.remove("stage-prepare", "stage-reviewing", "stage-decide", "stage-export");
+  document.body.classList.add("stage-" + (stage || "prepare"));
+  if (stage === "reviewing") {
+    $("live-title").textContent = "AI 正在初审";
+    $("live-kicker").textContent = "LIVE";
+  } else if (stage === "decide" || stage === "export") {
+    $("live-title").textContent = "初审候选已形成";
+    $("live-kicker").textContent = "REVIEW";
+  } else {
+    $("live-title").textContent = "等待开始。";
+    $("live-kicker").textContent = "IDLE";
+  }
+}
 
 function applyState(state) {
   $("teacher-name").value = state.teacher_name || "";
@@ -233,12 +325,16 @@ function applyState(state) {
   $("model").value = state.model || "";
   $("base-url").value = state.base_url || "";
   $("api-key").value = "";
-  $("api-key").placeholder = state.api_key_set ? "已保存，留空则保持不变" : "未保存，离线初筛";
+  $("api-key").placeholder = state.api_key_set ? "已保存，留空则保持不变" : "未保存，离线初审";
   renderIssues(state.issues || []);
+  renderDrafts(state.history_drafts || []);
+  renderSessions(state.sessions || []);
+  $("paper-path").textContent = state.paper_path || "尚未选择当前新稿";
   $("btn-open-doc").disabled = !state.reviewed_path;
   $("btn-open-folder").disabled = !state.output_dir;
   $("reviewed-path").textContent = state.reviewed_path || "";
-  renderResults(state.findings || [], state.recall, state.used_model, state.warning);
+  renderResults(state.findings || [], state.recall, state.used_model, state.warning, state.stats);
+  setStage(state.stage || "prepare");
   if (state.status) log(state.status);
 }
 
@@ -246,8 +342,6 @@ async function refresh() {
   if (!hasBridge()) return;
   applyState(await api("state"));
 }
-
-/* ---------- actions ---------- */
 
 $("btn-save-identity").addEventListener("click", async () => {
   if (!hasBridge()) return;
@@ -265,7 +359,7 @@ $("btn-ingest").addEventListener("click", async () => {
   setStatus("正在导入历史稿…", "busy");
   const result = await api("ingest_files");
   log(result.message, result.ok ? "ok" : "err");
-  setStatus(result.ok ? "历史稿已导入，待确认" : "未导入", result.ok ? "done" : "err");
+  setStatus(result.ok ? "历史稿已导入" : "未导入", result.ok ? "done" : "err");
   await refresh();
 });
 
@@ -278,18 +372,29 @@ $("btn-demo").addEventListener("click", async () => {
   await refresh();
 });
 
+$("btn-choose-paper").addEventListener("click", async () => {
+  if (!hasBridge()) return;
+  const result = await api("choose_paper");
+  if (result && result.ok) {
+    $("paper-path").textContent = result.paper_path || "";
+    log(result.message, "ok");
+  }
+});
+
 $("btn-review").addEventListener("click", async () => {
   if (!hasBridge()) return;
   const btn = $("btn-review");
   btn.disabled = true;
-  setStatus("正在初筛新稿…", "busy");
-  log("正在初筛新稿…");
+  setStage("reviewing");
+  setStatus("AI 正在初审…", "busy");
+  log("AI 正在初审");
   const result = await api("review_file");
   if (!result || !result.started) {
-    const message = result && result.message ? result.message : "未开始初筛。";
+    const message = result && result.message ? result.message : "未开始初审。";
     const cancelled = message.includes("未选择") || message.includes("请稍候");
     log(message, cancelled ? "" : "err");
-    setStatus(cancelled ? "准备就绪" : "初筛未完成", cancelled ? "idle" : "err");
+    setStatus(cancelled ? "准备就绪" : "初审未完成", cancelled ? "idle" : "err");
+    setStage("prepare");
     btn.disabled = false;
     return;
   }
@@ -315,21 +420,23 @@ function applyProgress(prog) {
   const message = prog.message || prog.status || "";
   if (prog.error) {
     log(prog.error || message || "审查失败。", "err");
-    setStatus("初筛未完成", "err");
+    setStatus("初审未完成", "err");
+    setStage("prepare");
   } else if (prog.done) {
     log(prog.status || message, "ok");
-    setStatus("初筛完成", "done");
+    setStatus("请处理候选意见", "done");
+    setStage(prog.stage || "decide");
   } else if (message) {
     log(message);
     setStatus(message, "busy");
+    setStage("reviewing");
   }
-  renderResults(prog.findings || [], prog.recall, prog.used_model, prog.warning);
+  renderResults(prog.findings || [], prog.recall, prog.used_model, prog.warning, prog.stats);
   renderTechLog(prog.tech_log || []);
   $("btn-open-doc").disabled = !prog.reviewed_path;
   $("btn-open-folder").disabled = !prog.output_dir;
-  if (prog.reviewed_path) {
-    $("reviewed-path").textContent = prog.reviewed_path;
-  }
+  if (prog.reviewed_path) $("reviewed-path").textContent = prog.reviewed_path;
+  if (prog.paper_path) $("paper-path").textContent = prog.paper_path;
 }
 
 function pollReview() {
@@ -344,7 +451,7 @@ function pollReview() {
     if (prog.done || prog.error) {
       btn.disabled = false;
       if (prog.done && !prog.error) {
-        $("sec-results").scrollIntoView({ behavior: "smooth", block: "start" });
+        $("sec-decide").scrollIntoView({ behavior: "smooth", block: "start" });
       }
       return;
     }
@@ -353,6 +460,41 @@ function pollReview() {
   tick();
 }
 
+$("btn-accept-format").addEventListener("click", async () => {
+  if (!hasBridge()) {
+    lastFindings.forEach((item) => {
+      if (kindOf(item) === "format" && decisionOf(item) === "pending") item.teacher_decision = "accepted";
+    });
+    lastStats = countsFrom(lastFindings);
+    renderResults(lastFindings, lastRecall, false, "", lastStats);
+    return;
+  }
+  await api("accept_format_batch");
+  await refresh();
+});
+
+async function doExport(allowPending) {
+  if (!hasBridge()) return;
+  const result = await api("export_final", allowPending);
+  if (!result) return;
+  if (!result.ok && result.needs_confirm) {
+    log(result.message, "err");
+    setStatus("仍有未处理意见", "err");
+    return;
+  }
+  if (result.ok) {
+    log(result.warning || "已生成正式审稿稿件。", "ok");
+    $("btn-open-doc").disabled = !result.reviewed_path;
+    $("reviewed-path").textContent = result.reviewed_path || "";
+    if (result.stats) renderExportStats(result.stats);
+    setStage("export");
+  } else {
+    log(result.message || "未能生成正式稿。", "err");
+  }
+}
+
+$("btn-export").addEventListener("click", () => doExport(false));
+$("btn-export-confirmed").addEventListener("click", () => doExport(true));
 $("btn-open-doc").addEventListener("click", () => hasBridge() && api("open_reviewed"));
 $("btn-open-folder").addEventListener("click", () => hasBridge() && api("open_folder"));
 $("btn-settings").addEventListener("click", () => $("settings-modal").classList.remove("hidden"));
@@ -370,11 +512,9 @@ $("btn-save-settings").addEventListener("click", async () => {
   });
   $("settings-modal").classList.add("hidden");
   $("api-key").value = "";
-  log(result.api_key_set ? "已保存模型设置。密钥只留在本机，重启后不用重填。" : "已保存模型设置。未填写密钥，将走离线初筛。", "ok");
+  log(result.api_key_set ? "已保存模型设置。密钥只留在本机，重启后不用重填。" : "已保存模型设置。未填写密钥，将走离线初审。", "ok");
   await refresh();
 });
-
-/* ---------- browser preview fallback (no pywebview) ---------- */
 
 const DEMO_STATE = {
   teacher_name: "老师甲",
@@ -385,11 +525,14 @@ const DEMO_STATE = {
   base_url: "",
   api_key: "",
   api_key_set: false,
-  reviewed_path: "C:/Users/demo/Documents/论文审改结果/new-reviewed.docx",
+  paper_path: "C:/Users/demo/Documents/new.docx",
+  reviewed_path: "",
   output_dir: "C:/Users/demo/Documents/论文审改结果",
-  status: "演示数据：完成，共 4 条建议。",
+  status: "演示数据：AI 初审完成，4 条候选待老师处理。",
   used_model: false,
   warning: "",
+  stage: "decide",
+  stats: { ai_candidates: 4, accepted: 0, edited_accepted: 0, rejected: 0, pending: 4, formal: 0 },
   issues: [
     {
       id: "i-001",
@@ -402,35 +545,20 @@ const DEMO_STATE = {
       original_span: "非常非常有效",
       teacher_intent: "不要用「非常非常有效」这类叠词主观评价，要有数据支撑。",
     },
-    {
-      id: "i-002",
-      status: "candidate",
-      category: "C",
-      issue_type: "格式规范",
-      scope: "表格",
-      problem: "表格缺少题注",
-      original_text: "表格上方要有「表 X 标题」格式的题注。",
-      original_span: "表 2",
-      teacher_intent: "表格上方要有「表 X 标题」格式的题注。",
-    },
-    {
-      id: "i-003",
-      status: "confirmed",
-      category: "B",
-      issue_type: "论证依据",
-      scope: "实验章节",
-      problem: "结论用词过满，与实验数据不匹配",
-      original_text: "「显著提升」需要显著性检验支撑，0.02 的提升配不上这个用词。",
-      original_span: "显著提升",
-      teacher_intent: "「显著提升」需要显著性检验支撑，0.02 的提升配不上这个用词。",
-    },
+  ],
+  history_drafts: [
+    { draft_id: "v1", path: "C:/Users/demo/v1.docx", accessible: true, issue_count: 1 },
+  ],
+  sessions: [
+    { id: "s-1", student_id: "zhou", draft_id: "new", completed: false },
   ],
   findings: [
     {
       id: "rule-A-1",
       source: "rule",
+      kind: "language",
       category: "A",
-      code: "padded_adverb",
+      teacher_decision: "pending",
       problem: "叠词加强语气，属无依据的主观评价。",
       rationale: "「非常非常」是口语化叠词，学术论文应给出可核验的数据。",
       quote: "该方法非常非常有效。",
@@ -444,8 +572,9 @@ const DEMO_STATE = {
     {
       id: "rule-C-1",
       source: "rule",
+      kind: "format",
       category: "C",
-      code: "missing_table_caption",
+      teacher_decision: "pending",
       problem: "表格缺少题注。",
       rationale: "学校手册要求每个表格上方有「表 X 标题」格式的题注。",
       quote: "",
@@ -457,7 +586,9 @@ const DEMO_STATE = {
     {
       id: "history-i-001",
       source: "history",
+      kind: "history",
       category: "A",
+      teacher_decision: "pending",
       problem: "学生在新稿中仍出现已确认的历史问题。",
       rationale: "历次稿件已指出：不要用「非常非常有效」这类叠词主观评价，要有数据支撑。",
       quote: "非常非常有效",
@@ -465,6 +596,7 @@ const DEMO_STATE = {
       paragraph_index: 12,
       apply: "comment",
       issue_id: "i-001",
+      history_refs: ["i-001"],
       evidence: [
         { kind: "history", draft_id: "draft-2", text: "不要用「非常非常有效」这类叠词主观评价，要有数据支撑。" },
         { kind: "history_span", draft_id: "draft-2", text: "非常非常有效" },
@@ -473,8 +605,10 @@ const DEMO_STATE = {
     {
       id: "argument-1",
       source: "argument",
+      kind: "content",
+      subtype: "argument",
       category: "B",
-      code: "claim_without_evidence",
+      teacher_decision: "pending",
       problem: "结论用词过满，实验结果仅有微弱数值变化。",
       rationale: "未见显著性检验，提升幅度与「显著提升」不符。",
       quote: "实验结果表明该方法显著提升了分类准确率。",
@@ -487,22 +621,7 @@ const DEMO_STATE = {
       ],
     },
   ],
-  recall: {
-    confirmed: 2,
-    recalled: 2,
-    written: 1,
-    skipped: [
-      {
-        issue_id: "i-003",
-        category: "B",
-        problem: "结论用词过满，与实验数据不匹配",
-        original_text: "「显著提升」需要显著性检验支撑，0.02 的提升配不上这个用词。",
-        new_quote: "显著提升了分类准确率",
-        reason: "在新稿中召回了相似原文，但未判定为复犯（可能已修复或依据不足），未写入批注。",
-      },
-    ],
-    absent: [],
-  },
+  recall: { confirmed: 1, recalled: 1, written: 1, skipped: [], absent: [] },
 };
 
 function bootLive() {

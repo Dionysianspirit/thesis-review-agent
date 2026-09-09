@@ -43,14 +43,15 @@ def test_offline_review_labels_history_and_rule_findings(tmp_path: Path):
     history_item = next(item for item in result.findings if item.source == "history")
     assert history_item.issue_id == subjective.id
     assert any("避免主观评价" in evidence.text for evidence in history_item.evidence)
+    assert all(item.teacher_decision == "pending" for item in result.findings)
     assert result.reviewed_path.exists()
     assert result.findings_path.exists()
     Document(str(result.reviewed_path))
     opened = WordAdapter().open_path(result.reviewed_path)
     comments = WordAdapter().extract_comments(opened)
     texts = [comment.text for comment in comments]
-    assert any("历次" in text or "已指出" in text for text in texts)
-    assert any(comment.author == "审改助手" for comment in comments)
+    assert not any("历次" in text or "已指出" in text for text in texts)
+    assert not any(comment.author == "审改助手" for comment in comments)
 
 
 def test_offline_review_has_no_argument_source(tmp_path: Path):

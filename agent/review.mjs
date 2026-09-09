@@ -120,30 +120,27 @@ async function startWorker(cfg) {
   return { call, child, socket, stderr: () => stderr };
 }
 
-const HOUSEKEEPING_PROMPT = [
-  "你是本科毕业论文 Word 审改助手的第一阶段。",
-  "必须先 open_draft，再 run_checks，再 get_history_candidates。",
-  "对每条候选自行判断是不是同一条历史问题仍未改正。",
-  "只有判定复犯、且能给出本稿中真实存在的原文时，才调用 confirm_history_finding。",
-  "不确定，或标题未改但所批内容已经修好，则跳过，不要 confirm。",
-  "没有 confirm_history_finding 成功返回的 issue_id，禁止使用「再次」「屡次」。",
-  "不要审查论证，不要列出全文，不要 commit_review。",
-  "批注作者为审改助手。不要整段重写。",
-].join("");
-
-const CLAIM_EVIDENCE_PROMPT = [
-  "你是本科毕业论文审改助手的第二阶段。目标只有一项：关键主张是否被实验或数据支持。",
-  "先 list_outline，再按疑点 read_section 或 read_paragraphs。禁止为了省事列出全文。",
-  "对「显著」「提高」「有效」等主张，必须去实验或结果里核对，并主动找反证（有无基线、有无显著性、提升是否配得上用词）。",
-  "证据不够或无法判断时，不要调用 record_argument_finding。",
-  "写批注必须同时给出稿件中真实存在的主张原文和证据或反证原文。",
-  "最多形成 3 条 finding，然后必须 commit_review。",
-  "不要审格式，不要当历史复查，不要使用「再次」「屡次」。",
-  "不要用修订改论证。",
+export const FIRST_PASS_PROMPT = [
+  "你是本科毕业论文的第一轮初审 Agent，服务对象是老师，不是学生。",
+  "目标：替老师完成第一遍格式、语言、内容、历史复查和必要时的外部核验。宁可少报，不要乱报。",
+  "最终决定由老师做。你只产生候选审稿意见，不要把意见写成已经给学生的正式结论。",
+  "流程边界：必须先 open_draft。用 report_intent 持续报告当前阅读位置、检查目标和结果状态，使用老师能看懂的中文短句，不要输出隐藏推理或思维链。",
+  "先 list_outline，再按疑点自主选择章节 read_section / read_paragraphs / find_text。禁止为了省事列出全文。导航次数有限。",
+  "run_checks 只把格式和语言规则写入候选，不会写进学生 Word。",
+  "内容至少覆盖：论证缺口、数据前后矛盾、方法/实验能否支持结论、摘要-正文-结论一致性、术语/结构明显断裂。对「显著」「明显」「有效」等用词，必须到实验或结果里核对，并主动找反证。",
+  "内部能核对的问题不要联网。只有政策、统计公报、首次提出权、外部市场规模等无法在论文内核实的事实，才 web_search。检索失败不得编造来源或结论。",
+  "学生历史：get_history_candidates 与 semantic_history_candidates 只是召回。语义相似不等于复犯。必须阅读新稿上下文，只有同类问题仍存在且能给出本稿真实原文时，才 confirm_history_finding。",
+  "老师历史：get_teacher_feedback 只是软参考。不得生成老师人格画像，不得改写本提示，不得把一次采用升格为学校硬规则。被驳回的意见不能当成正向偏好。",
+  "写候选时，quote / evidence_quote 必须是稿件中真实存在的子串。证据不足就放弃，不要调用记录工具。",
+  "学校格式由规则检查，不要用模型自由判断格式。",
+  "不要使用「再次」「屡次」。不要整段重写。完成初审后必须 commit_review。",
 ].join("");
 
 const OVERCLAIM_CLAIM = "实验结果表明该方法显著提升了分类准确率。";
 const OVERCLAIM_EVIDENCE = "准确率由 0.81 提高到 0.83。";
+const DATA_LEFT = "准确率为 81%";
+const DATA_RIGHT = "准确率为 85%";
+const STATS_CLAIM = "根据国家统计局数据，2023 年相关产业规模已超过十万亿元。";
 
 function makeTool(call, name, label, description, parameters, extra = {}) {
   return {
@@ -169,13 +166,22 @@ function allTools(call) {
       path: Type.Optional(Type.String()),
       bytes_b64: Type.Optional(Type.String()),
     })),
-    makeTool(call, "run_checks", "规则检查", "运行格式和语言规则，并写入批注修订。", Type.Object({
+    makeTool(call, "report_intent", "报告检查意图", "向老师报告当前阅读位置、检查目标和结果状态。不要输出思维链。", Type.Object({
+      message: Type.String(),
+    })),
+    makeTool(call, "run_checks", "规则检查", "运行格式和语言规则，结果进入候选区，不写学生 Word。", Type.Object({
       draft_id: Type.Optional(Type.String()),
     })),
-    makeTool(call, "get_history_candidates", "历史候选", "用字符串召回教师已确认的历史问题候选，只返回原文片段，不写批注。", Type.Object({
+    makeTool(call, "get_history_candidates", "历史字符串召回", "用字符串召回教师已确认的历史问题候选。只返回原文片段，不写意见，不能直接判复犯。", Type.Object({
       draft_id: Type.Optional(Type.String()),
     })),
-    makeTool(call, "confirm_history_finding", "确认复发", "判定同一问题仍未改正后，校验 new_quote 为本稿子串才写历史批注。不要编造原文。", Type.Object({
+    makeTool(call, "semantic_history_candidates", "学生历史语义召回", "语义召回学生历史问题。相似不等于复犯，必须再读新稿上下文。", Type.Object({
+      draft_id: Type.Optional(Type.String()),
+    })),
+    makeTool(call, "get_teacher_feedback", "老师反馈软参考", "检索老师以往接受/驳回/改写，仅作软参考。驳回项不是正向规则。", Type.Object({
+      limit: Type.Optional(Type.Number()),
+    })),
+    makeTool(call, "confirm_history_finding", "确认历史复犯候选", "判定同一问题仍未改正后，校验 new_quote 为本稿子串才进入候选。不要编造原文。", Type.Object({
       issue_id: Type.String(),
       new_quote: Type.String(),
       rationale: Type.Optional(Type.String()),
@@ -194,38 +200,49 @@ function allTools(call) {
       needle: Type.String(),
       max_hits: Type.Optional(Type.Number()),
     })),
-    makeTool(call, "record_argument_finding", "记录论证缺口", "主张原文和证据原文都必须是稿件中的真实子串，校验通过后才写批注。不要编造原文。", Type.Object({
+    makeTool(call, "web_search", "外部检索", "仅在论文内部无法核验的事实时使用。失败不得编造。", Type.Object({
+      query: Type.String(),
+      limit: Type.Optional(Type.Number()),
+    })),
+    makeTool(call, "web_fetch", "读取外部页面", "读取已检索到的来源页面。失败不得编造。", Type.Object({
+      url: Type.String(),
+    })),
+    makeTool(call, "record_argument_finding", "记录论证缺口", "主张原文和证据原文都必须是稿件中的真实子串。", Type.Object({
       claim_quote: Type.String(),
       evidence_quote: Type.String(),
       problem: Type.String(),
       rationale: Type.String(),
       draft_id: Type.Optional(Type.String()),
     })),
-    makeTool(call, "commit_review", "提交审改", "导出带批注修订的 Word 副本。完成后不要再调用其他工具。", Type.Object({
+    makeTool(call, "record_content_finding", "记录内容问题", "记录论证、数据、方法、实验或结构问题。原文必须真实存在。", Type.Object({
+      kind: Type.Optional(Type.String()),
+      subtype: Type.String(),
+      quote: Type.String(),
+      evidence_quote: Type.Optional(Type.String()),
+      problem: Type.String(),
+      rationale: Type.String(),
+      suggested_action: Type.Optional(Type.String()),
+      section: Type.Optional(Type.String()),
+      draft_id: Type.Optional(Type.String()),
+    })),
+    makeTool(call, "record_external_finding", "记录外部核验", "必须带来源 title 与 URL。外部结果不是绝对真理。", Type.Object({
+      quote: Type.String(),
+      problem: Type.String(),
+      rationale: Type.String(),
+      external_sources: Type.Array(Type.Object({
+        title: Type.String(),
+        url: Type.String(),
+        source_type: Type.Optional(Type.String()),
+        query: Type.Optional(Type.String()),
+        checked_time: Type.Optional(Type.String()),
+      })),
+      draft_id: Type.Optional(Type.String()),
+    })),
+    makeTool(call, "commit_review", "结束初审", "保存候选意见。不会生成给学生的正式 Word。", Type.Object({
       draft_id: Type.Optional(Type.String()),
       output_dir: Type.String(),
     }), { terminate: true }),
   ];
-}
-
-function toolsNamed(call, names) {
-  const wanted = new Set(names);
-  return allTools(call).filter((tool) => wanted.has(tool.name));
-}
-
-function housekeepingTools(call) {
-  return toolsNamed(call, ["open_draft", "run_checks", "get_history_candidates", "confirm_history_finding"]);
-}
-
-function claimTools(call) {
-  return toolsNamed(call, [
-    "list_outline",
-    "read_section",
-    "read_paragraphs",
-    "find_text",
-    "record_argument_finding",
-    "commit_review",
-  ]);
 }
 
 function compatibleProvider(cfg) {
@@ -295,11 +312,24 @@ function headingOrdinal(outline, keyword) {
   return hit ? hit.ordinal : 1;
 }
 
-async function runClaimEvidencePhase(agent, call, cfg) {
-  agent.state.systemPrompt = CLAIM_EVIDENCE_PROMPT;
-  agent.state.tools = claimTools(call);
-  await agent.prompt(
-    `对已打开的稿件核对关键主张是否被实验或数据支持。draft_id=${cfg.draft_id}，output_dir=${cfg.output_dir}。完成后调用 commit_review。`,
+function findCandidatesJson(context) {
+  const messages = context.messages || [];
+  let fallback = { candidates: [] };
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const parsed = parseToolJson(messages[i]);
+    if (parsed && Array.isArray(parsed.candidates) && parsed.candidates.length) {
+      if (parsed.candidates.some((item) => item.issue_id && item.new_quote)) return parsed;
+      if (!fallback.candidates.length) fallback = parsed;
+    }
+  }
+  return fallback;
+}
+
+function repeatCandidate(data) {
+  const candidates = data.candidates || [];
+  return candidates.find((item) =>
+    String(item.original_text || item.problem || "").includes("主观评价")
+    || String(item.new_quote || "").includes("非常非常有效"),
   );
 }
 
@@ -322,9 +352,9 @@ async function runLive(cfg, call) {
   }
   const agent = new Agent({
     initialState: {
-      systemPrompt: HOUSEKEEPING_PROMPT,
+      systemPrompt: FIRST_PASS_PROMPT,
       model,
-      tools: housekeepingTools(call),
+      tools: allTools(call),
       thinkingLevel: "off",
     },
     convertToLlm,
@@ -333,80 +363,34 @@ async function runLive(cfg, call) {
     toolExecution: "sequential",
   });
   await agent.prompt(
-    `打开稿件 path=${cfg.draft_path}，draft_id=${cfg.draft_id}。先完成规则检查和历史复查：召回候选后自行判断是否复犯。不要 commit。`,
-  );
-  await runClaimEvidencePhase(agent, call, cfg);
-}
-
-function findCandidatesJson(context) {
-  const messages = context.messages || [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const parsed = parseToolJson(messages[i]);
-    if (parsed && Array.isArray(parsed.candidates)) return parsed;
-  }
-  return { candidates: [] };
-}
-
-function repeatCandidate(data) {
-  const candidates = data.candidates || [];
-  return candidates.find((item) =>
-    String(item.original_text || item.problem || "").includes("主观评价")
-    || String(item.new_quote || "").includes("非常非常有效"),
+    `打开稿件 path=${cfg.draft_path}，draft_id=${cfg.draft_id}，output_dir=${cfg.output_dir}。自主完成第一轮初审，完成后调用 commit_review。`,
   );
 }
 
-function fauxHousekeeping(cfg) {
-  const scenario = cfg.faux_scenario || "housekeeping";
-  const prelude = [
-    fauxAssistantMessage([
-      fauxToolCall("open_draft", { path: cfg.draft_path }),
-    ]),
-    fauxAssistantMessage([
-      fauxToolCall("run_checks", { draft_id: cfg.draft_id }),
-    ]),
-    fauxAssistantMessage([
-      fauxToolCall("get_history_candidates", { draft_id: cfg.draft_id }),
-    ]),
-  ];
-  if (scenario === "skip_history") {
-    return [
-      ...prelude,
-      fauxAssistantMessage("标题未改，所批内容已修好，不写复发。"),
-    ];
-  }
-  if (scenario === "overclaim" || scenario === "abandon") {
-    return [
-      ...prelude,
-      fauxAssistantMessage("没有判定为复犯的历史候选。"),
-    ];
-  }
-  return [
-    ...prelude,
-    (context) => {
-      const hit = repeatCandidate(findCandidatesJson(context));
-      if (!hit) {
-        return fauxAssistantMessage("没有判定为复犯的历史候选。");
-      }
-      return fauxAssistantMessage([
-        fauxToolCall("confirm_history_finding", {
-          issue_id: hit.issue_id,
-          new_quote: hit.new_quote,
-          rationale: "仍是无依据的主观评价。",
-          draft_id: cfg.draft_id,
-        }),
-      ]);
-    },
-    fauxAssistantMessage("规则与历史复查已完成。"),
-  ];
-}
-
-function fauxClaimPhase(cfg) {
+function fauxFirstPass(cfg) {
   const scenario = cfg.faux_scenario || "housekeeping";
   const commit = fauxAssistantMessage([
     fauxToolCall("commit_review", { draft_id: cfg.draft_id, output_dir: cfg.output_dir }),
   ]);
+  const prelude = [
+    fauxAssistantMessage([fauxToolCall("report_intent", { message: "正在读取论文结构" })]),
+    fauxAssistantMessage([fauxToolCall("open_draft", { path: cfg.draft_path })]),
+    fauxAssistantMessage([fauxToolCall("run_checks", { draft_id: cfg.draft_id })]),
+    fauxAssistantMessage([fauxToolCall("get_teacher_feedback", { limit: 8 })]),
+    fauxAssistantMessage([fauxToolCall("semantic_history_candidates", { draft_id: cfg.draft_id })]),
+    fauxAssistantMessage([fauxToolCall("get_history_candidates", { draft_id: cfg.draft_id })]),
+  ];
+  if (scenario === "skip_history") {
+    return [
+      ...prelude,
+      fauxAssistantMessage([fauxToolCall("list_outline", {})]),
+      commit,
+    ];
+  }
   if (scenario === "overclaim") {
     return [
+      ...prelude,
+      fauxAssistantMessage([fauxToolCall("report_intent", { message: "正在检查摘要中的核心结论" })]),
       fauxAssistantMessage([fauxToolCall("list_outline", {})]),
       (context) => fauxAssistantMessage([
         fauxToolCall("read_section", { start_ordinal: headingOrdinal(lastToolJson(context), "4 结论") }),
@@ -424,11 +408,11 @@ function fauxClaimPhase(cfg) {
         }),
       ]),
       commit,
-      fauxAssistantMessage("已提交审改副本。"),
     ];
   }
   if (scenario === "abandon") {
     return [
+      ...prelude,
       fauxAssistantMessage([fauxToolCall("list_outline", {})]),
       (context) => fauxAssistantMessage([
         fauxToolCall("read_section", { start_ordinal: headingOrdinal(lastToolJson(context), "4 结论") }),
@@ -437,12 +421,94 @@ function fauxClaimPhase(cfg) {
         fauxToolCall("read_section", { start_ordinal: headingOrdinal(findOutlineJson(context), "3 实验结果") }),
       ]),
       commit,
-      fauxAssistantMessage("证据充分，不写论证批注。已提交审改副本。"),
+    ];
+  }
+  if (scenario === "data_mismatch") {
+    return [
+      ...prelude,
+      fauxAssistantMessage([fauxToolCall("report_intent", { message: "正在核对第 3 章与第 5 章中的准确率数据" })]),
+      fauxAssistantMessage([fauxToolCall("list_outline", {})]),
+      fauxAssistantMessage([fauxToolCall("find_text", { needle: "81%" })]),
+      fauxAssistantMessage([
+        fauxToolCall("record_content_finding", {
+          kind: "content",
+          subtype: "data_consistency",
+          quote: DATA_LEFT,
+          evidence_quote: DATA_RIGHT,
+          problem: "摘要与结论中的准确率不一致。",
+          rationale: "同一指标在不同章节给出了 81% 与 85%。",
+          suggested_action: "统一准确率并核对表格。",
+          draft_id: cfg.draft_id,
+        }),
+      ]),
+      commit,
+    ];
+  }
+  if (scenario === "web_needed") {
+    return [
+      ...prelude,
+      fauxAssistantMessage([fauxToolCall("report_intent", { message: "正在核对外部数据来源" })]),
+      fauxAssistantMessage([fauxToolCall("list_outline", {})]),
+      fauxAssistantMessage([fauxToolCall("web_search", { query: "国家统计局 2023 产业规模" })]),
+      (context) => {
+        const data = lastToolJson(context);
+        const hit = (data.hits || [])[0] || { title: "", url: "" };
+        if (!data.ok || !hit.url) {
+          return commit;
+        }
+        return fauxAssistantMessage([
+          fauxToolCall("record_external_finding", {
+            quote: STATS_CLAIM,
+            problem: "对外引用的宏观数据需要老师核对来源。",
+            rationale: "论文给出国家统计局口径的市场规模，已检索到候选来源，不能当作绝对真理。",
+            external_sources: [{
+              title: hit.title || "检索结果",
+              url: hit.url,
+              source_type: hit.source_type || "web",
+              query: "国家统计局 2023 产业规模",
+              checked_time: hit.checked_time || "",
+            }],
+            draft_id: cfg.draft_id,
+          }),
+        ]);
+      },
+      commit,
+    ];
+  }
+  if (scenario === "web_skip") {
+    return [
+      ...prelude,
+      fauxAssistantMessage([fauxToolCall("report_intent", { message: "正在核对摘要和结论中的准确率数据" })]),
+      fauxAssistantMessage([fauxToolCall("list_outline", {})]),
+      fauxAssistantMessage([fauxToolCall("find_text", { needle: "81%" })]),
+      commit,
+    ];
+  }
+  if (scenario === "web_fail") {
+    return [
+      ...prelude,
+      fauxAssistantMessage([fauxToolCall("web_search", { query: "国家统计局 不存在的检索" })]),
+      commit,
     ];
   }
   return [
+    ...prelude,
+    (context) => {
+      const hit = repeatCandidate(findCandidatesJson(context));
+      if (!hit) {
+        return fauxAssistantMessage([fauxToolCall("list_outline", {})]);
+      }
+      return fauxAssistantMessage([
+        fauxToolCall("confirm_history_finding", {
+          issue_id: hit.issue_id,
+          new_quote: hit.new_quote,
+          rationale: "仍是无依据的主观评价。",
+          draft_id: cfg.draft_id,
+        }),
+      ]);
+    },
+    fauxAssistantMessage([fauxToolCall("list_outline", {})]),
     commit,
-    fauxAssistantMessage("已提交审改副本。"),
   ];
 }
 
@@ -450,20 +516,19 @@ async function runFaux(cfg, call) {
   const faux = fauxProvider({ models: [{ id: "faux-review" }] });
   const models = createModels();
   models.setProvider(faux.provider);
-  faux.setResponses([...fauxHousekeeping(cfg), ...fauxClaimPhase(cfg)]);
+  faux.setResponses(fauxFirstPass(cfg));
   const agent = new Agent({
     initialState: {
-      systemPrompt: HOUSEKEEPING_PROMPT,
+      systemPrompt: FIRST_PASS_PROMPT,
       model: faux.getModel(),
-      tools: housekeepingTools(call),
+      tools: allTools(call),
       thinkingLevel: "off",
     },
     convertToLlm,
     streamFn: models.streamSimple.bind(models),
     toolExecution: "sequential",
   });
-  await agent.prompt("开始审查。先完成规则检查和历史复查。");
-  await runClaimEvidencePhase(agent, call, cfg);
+  await agent.prompt("开始第一轮初审。完成后调用 commit_review。");
 }
 
 async function main() {
