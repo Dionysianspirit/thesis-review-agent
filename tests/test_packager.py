@@ -74,6 +74,8 @@ def test_readme_does_not_ship_v04_as_v06():
     assert "论文审改助手.exe" in text
     # Latest GitHub Release is still V0.4; do not send teachers there as V0.6.
     assert "](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)" not in text
+    assert "thesis-review-agent-windows" in text
+    assert "/actions" in text
 
 
 def test_rename_dist_survives_windows_console_encoding():
