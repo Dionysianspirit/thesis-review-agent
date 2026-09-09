@@ -23,6 +23,8 @@ def test_gui_shell_has_collapsible_tech_log_and_progress_poll():
     assert "progress" in js
     assert "300" in js
     assert "started" in js
+    assert "item.label" in js
+    assert "未完成" in js
 
 
 def test_bridge_progress_reads_partial_live(tmp_path: Path):

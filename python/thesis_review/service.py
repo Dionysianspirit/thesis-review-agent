@@ -45,21 +45,51 @@ from thesis_review.types import (
 from thesis_review.word.adapter import WordAdapter
 
 ASSISTANT_AUTHOR = "审改助手"
+PI_TIMEOUT_SEC = 600
 
 
-def offline_fallback_warning(exc: BaseException, *, semantic: bool) -> str:
+def _fallback_detail(exc: BaseException) -> str:
     text = str(exc).replace("\r", "\n")
+    name = type(exc).__name__
+    code = getattr(exc, "code", "")
+    if name == "TimeoutExpired" or code == "pi_timeout" or "timed out after" in text:
+        return "初审超过等待时间，已停止。"
     if "ECONNREFUSED" in text or "worker portfile" in text or "worker connect" in text:
-        detail = "本地审稿服务未能连上，请再试一次。"
+        return "本地审稿服务未能连上，请再试一次。"
+    if text.lstrip().startswith("Command '[") or "Command '[" in text[:40]:
+        return "本地审稿进程异常结束。"
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "模型审查失败")
+    if " at " in first:
+        first = first.split(" at ", 1)[0].strip()
+    return first[:180]
+
+
+def offline_fallback_warning(exc: BaseException, *, semantic: bool, recovered: bool = False) -> str:
+    detail = _fallback_detail(exc)
+    if recovered:
+        warning = f"模型初审未跑完。{detail}已保留已经形成的候选。"
     else:
-        first = next((line.strip() for line in text.splitlines() if line.strip()), "模型审查失败")
-        if " at " in first:
-            first = first.split(" at ", 1)[0].strip()
-        detail = first[:180]
-    warning = f"模型审查未能完成，已改用离线规则。{detail}"
+        warning = f"模型审查未能完成，已改用离线规则。{detail}"
     if semantic:
         warning += " 历史问题未经确认，未写成复犯。"
     return warning
+
+
+def load_partial_findings(live: Path) -> list[Finding]:
+    path = Path(live) / "findings.json"
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    findings: list[Finding] = []
+    for item in raw:
+        if isinstance(item, dict) and (item.get("id") or item.get("problem")):
+            findings.append(Finding.from_dict(item))
+    return findings
 
 
 class ThesisReviewService:
@@ -215,7 +245,7 @@ class ThesisReviewService:
         use_pi: bool = False,
         faux: bool = False,
         faux_scenario: str = "",
-        pi_timeout: int = 180,
+        pi_timeout: int = PI_TIMEOUT_SEC,
         offline_fallback: bool = True,
         session: ReviewSession | None = None,
         paper_path: str = "",
@@ -266,7 +296,19 @@ class ThesisReviewService:
             except Exception as exc:  # noqa: BLE001 - fall back to offline rules
                 if not offline_fallback:
                     raise
-                warning = offline_fallback_warning(exc, semantic=semantic)
+                recovered = load_partial_findings(live)
+                warning = offline_fallback_warning(exc, semantic=semantic, recovered=bool(recovered))
+                if recovered:
+                    return self._finish_partial_pi(
+                        session=session,
+                        findings=recovered,
+                        original=data,
+                        output_dir=output_dir,
+                        draft_id=draft_id,
+                        started=started,
+                        warning=warning,
+                        used_model=semantic,
+                    )
         append_event(live, {"op": "open_draft", "ok": True})
         opened = self.adapter.open_bytes(data)
         paragraphs = self.adapter.list_paragraphs(opened)
@@ -319,6 +361,49 @@ class ThesisReviewService:
             session=session,
             result=result,
             original=data,
+            output_dir=output_dir,
+            draft_id=draft_id,
+            started=started,
+            warning=warning,
+        )
+
+    def _finish_partial_pi(
+        self,
+        *,
+        session: ReviewSession,
+        findings: list[Finding],
+        original: bytes,
+        output_dir: Path,
+        draft_id: str,
+        started: float,
+        warning: str,
+        used_model: bool,
+    ) -> ReviewResult:
+        live = live_dir(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        source_path = output_dir / f"{draft_id}-source.docx"
+        reviewed_path = output_dir / f"{draft_id}-reviewed.docx"
+        findings_path = output_dir / f"{draft_id}-findings.json"
+        if not source_path.is_file():
+            source_path.write_bytes(original)
+        if not reviewed_path.is_file():
+            reviewed_path.write_bytes(original)
+        append_event(live, {"op": "commit_review", "ok": True})
+        write_findings(live, findings)
+        append_event(live, {"op": "done", "ok": True})
+        result = ReviewResult(
+            reviewed_path=reviewed_path,
+            findings_path=findings_path,
+            findings=findings,
+            used_model=used_model,
+            warning=warning,
+            session_id=session.id,
+            source_path=str(source_path),
+        )
+        return self._finish_review(
+            session=session,
+            result=result,
+            original=original,
             output_dir=output_dir,
             draft_id=draft_id,
             started=started,
@@ -479,7 +564,7 @@ class ThesisReviewService:
         settings: AppSettings,
         faux: bool,
         faux_scenario: str = "",
-        timeout: int = 180,
+        timeout: int = PI_TIMEOUT_SEC,
         session_id: str = "",
     ) -> ReviewResult:
         from thesis_review.runtime import python_path, run_pi_review

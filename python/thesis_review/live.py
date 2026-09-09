@@ -27,6 +27,37 @@ OP_ZH = {
     "report_intent": "",
 }
 
+LOG_ZH = {
+    "open_draft": "打开稿件",
+    "list_outline": "读取结构",
+    "read_paragraphs": "读正文",
+    "read_section": "读章节",
+    "find_text": "检索原文",
+    "run_checks": "核对语言和格式",
+    "get_history_candidates": "复查历史问题",
+    "semantic_history_candidates": "语义复查历史",
+    "confirm_history_finding": "写历史候选",
+    "record_argument_finding": "写论证候选",
+    "record_content_finding": "写内容候选",
+    "record_external_finding": "写外部核验候选",
+    "web_search": "外部检索",
+    "web_fetch": "阅读外部来源",
+    "get_teacher_feedback": "参考老师反馈",
+    "commit_review": "保存候选",
+    "done": "初审结束",
+}
+
+CODE_ZH = {
+    "quote_not_in_draft": "原文对不上",
+    "missing_quote": "缺少原文",
+    "invalid_params": "参数不完整",
+    "nav_budget": "阅读次数已用尽",
+    "not_open": "尚未打开稿件",
+    "search_budget": "检索次数已用尽",
+    "issue_mismatch": "历史记录对不上",
+    "missing_source": "缺少来源",
+}
+
 
 def live_dir(output_dir: Path | str) -> Path:
     return Path(output_dir) / "live"
@@ -129,8 +160,14 @@ def read_progress(directory: Path | None) -> dict:
         message = chinese_message(op, heading=heading, previous=message, intent=intent)
         if op == "report_intent":
             continue
-        entry: dict = {"op": op, "ok": event.get("ok", True)}
+        entry: dict = {"op": op, "ok": event.get("ok", True), "label": LOG_ZH.get(op, op)}
         if heading:
             entry["heading"] = heading
+        code = str(event.get("code") or "")
+        if code:
+            entry["code"] = code
+            reason = CODE_ZH.get(code, "")
+            if reason:
+                entry["reason"] = reason
         tech_log.append(entry)
     return {"message": message, "findings": findings, "tech_log": tech_log}

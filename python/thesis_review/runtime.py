@@ -154,15 +154,18 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
         env["OPENAI_API_KEY"] = str(request["api_key"])
     if request.get("base_url"):
         env["THESIS_BASE_URL"] = str(request["base_url"])
-    result = subprocess.run(
-        command,
-        cwd=str(agent_dir()),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(agent_dir()),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewError("pi_timeout", "模型初审超过等待时间，已停止。") from exc
     if result.returncode != 0:
         raise ReviewError("pi_failed", result.stderr.strip() or result.stdout.strip() or "pi 进程失败")
     payload = json.loads(result.stdout.strip().splitlines()[-1])
