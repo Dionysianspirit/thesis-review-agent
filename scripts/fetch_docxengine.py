@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import time
 from pathlib import Path, PurePosixPath
 import shutil
 import tempfile
@@ -12,6 +13,24 @@ COMMIT = 'c4ca7ce5f540ef2e638fbf79cc5f7074702b2967'
 URL = f'https://codeload.github.com/ruwadgroup/docxengine/zip/{COMMIT}'
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / '.vendor/docxengine'
+ATTEMPTS = 3
+ATTEMPT_PAUSE_SECONDS = 4
+
+
+def _fetch_archive() -> bytes:
+    # codeload intermittently drops connections; one transient error should
+    # not fail the whole CI job, so retry a couple of times before giving up.
+    request = urllib.request.Request(URL, headers={'User-Agent': 'thesis-review-agent-probe'})
+    last_error: Exception | None = None
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                return response.read(10 * 1024 * 1024 + 1)
+        except OSError as exc:  # URLError, HTTPError and socket timeouts are OSError subclasses.
+            last_error = exc
+            if attempt < ATTEMPTS:
+                time.sleep(ATTEMPT_PAUSE_SECONDS)
+    raise SystemExit(f'Download failed after {ATTEMPTS} attempts: {last_error}')
 
 
 def main() -> None:
@@ -21,9 +40,7 @@ def main() -> None:
             print(f'Already present: DocxEngine {COMMIT}')
             return
         raise SystemExit('Existing vendor directory has no matching commit marker; refusing overwrite.')
-    request = urllib.request.Request(URL, headers={'User-Agent': 'thesis-review-agent-probe'})
-    with urllib.request.urlopen(request, timeout=45) as response:
-        archive_bytes = response.read(10 * 1024 * 1024 + 1)
+    archive_bytes = _fetch_archive()
     if len(archive_bytes) > 10 * 1024 * 1024:
         raise SystemExit('Archive exceeds the expected 10 MiB probe limit.')
     TARGET.parent.mkdir(parents=True, exist_ok=True)
