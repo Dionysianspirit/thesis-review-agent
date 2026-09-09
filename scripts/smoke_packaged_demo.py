@@ -58,6 +58,16 @@ def _bundle_runtime(out_dir: Path) -> None:
     dest.chmod(dest.stat().st_mode | 0o111)
 
 
+def assert_teacher_gate(payload: dict) -> dict:
+    if not payload.get("ok"):
+        raise SystemExit(payload.get("error") or "teacher-gate demo failed")
+    if int(payload.get("comments_before", 0)) != 0:
+        raise SystemExit("teacher gate failed: comments written before teacher decisions")
+    if int(payload.get("n_exported") or 0) < 1 or int(payload.get("comments_after") or 0) < 1:
+        raise SystemExit("packaged demo did not export teacher-approved Word comments")
+    return payload
+
+
 def smoke(binary: Path, probe: Path) -> dict:
     if probe.exists():
         shutil.rmtree(probe)
@@ -78,13 +88,7 @@ def smoke(binary: Path, probe: Path) -> dict:
     if not gate_path.is_file():
         raise SystemExit("packaged demo did not write teacher-gate.json")
     payload = json.loads(gate_path.read_text(encoding="utf-8"))
-    if not payload.get("ok"):
-        raise SystemExit(payload.get("error") or "teacher-gate demo failed")
-    if int(payload.get("comments_before") or 1) != 0:
-        raise SystemExit("teacher gate failed: comments written before teacher decisions")
-    if int(payload.get("n_exported") or 0) < 1 or int(payload.get("comments_after") or 0) < 1:
-        raise SystemExit("packaged demo did not export teacher-approved Word comments")
-    return payload
+    return assert_teacher_gate(payload)
 
 
 def main() -> int:
