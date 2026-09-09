@@ -4,14 +4,17 @@
 
 **它不是“AI 导师”，也不会替老师给论文下结论。**它更像一个交稿前的第一遍筛查器：把能明确定位、能给出依据的问题先找出来，写进 Word 副本，最后仍由老师逐条判断。
 
-> **当前版本：V0.5 · 可本地试用原型**  
+> **开发版：V0.5（main，尚未发布 Windows 安装包）**  
+> **最新可下载版：V0.4.0（Windows Release）**  
 > **重要边界：没有命中，不代表全文没有问题。**
 
 ---
 
 ## ⬇️ 老师 / 学生：直接下载使用
 
-**[下载 Windows 最新版](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)**
+**[下载 Windows 最新稳定版 V0.4.0](https://github.com/Dionysianspirit/thesis-review-agent/releases/tag/v0.4.0)**
+
+> `main` 已进入 V0.5 开发阶段，包含中文实时进度、模型设置与上次稿件路径持久化、真实模型评估入口等更新；这些改动目前尚未打成新的 Windows Release。
 
 适用环境：
 
@@ -279,8 +282,8 @@ status
 | V0.1 | ✅ | GUI、历史入库 / 确认、离线规则、Word 批注与修订 |
 | V0.2 | ✅ | 收紧历史字符串匹配，减少短批注、目录、章节重编号等误报 |
 | V0.3 | ✅ | 历史问题结构化；模型确认字符串候选是否真的是同一问题 |
-| V0.4 | ✅ | 模型判断集中到 Pi；增加主张-证据多步取证；Python 做 evidence gate |
-| V0.5 | ✅ 入口 | 窗口直播中文进度；密钥与上次稿件路径可持久化；本机真实模型金标 `thesis-review eval`。pytest 仍是 faux |
+| V0.4 | ✅ 已发布 | 模型判断集中到 Pi；增加主张-证据多步取证；Python 做 evidence gate |
+| V0.5 | 🧪 main 开发版 | 窗口直播中文进度；密钥与上次稿件路径可持久化；本机真实模型金标 `thesis-review eval`。pytest 仍是 faux；尚未发布 Windows 包 |
 
 当前还没有完成：
 
