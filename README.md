@@ -2,18 +2,20 @@
 
 > 面向教师的本科毕业论文本地 Word 审稿工作台。AI 负责第一轮发现问题，老师负责最终判断；只有老师确认过的意见，才会进入正式学生稿。
 
-**当前版本：V0.6 · 教师审稿工作台**
+**当前版本：V0.6.1 · 教师审稿工作台（V0.6 热修复）**
 
 **核心边界：AI 初审只产生候选，不直接改正式稿。** 老师可以逐条确认、编辑后确认或驳回；只有 `accepted` 与 `edited_accepted` 会写入最终 Word。
 
 ---
 
-## ⬇️ 老师：直接下载 V0.6
+## ⬇️ 老师：直接下载 V0.6.1
 
-**[下载 GitHub Releases 最新版（V0.6）](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)**
+**[下载 GitHub Releases 最新版（V0.6.1）](https://github.com/Dionysianspirit/thesis-review-agent/releases/latest)**
 
-当前 Windows Release：`v0.6.0`  
-发布包：`thesis-review-agent-v0.6.0-windows.zip`
+当前 Windows Release：`v0.6.1`  
+发布包：`thesis-review-agent-v0.6.1-windows.zip`
+
+这是 V0.6 热修复，不是新功能。修复同一输出目录再次 AI 初审时误连旧 `worker.port` 导致本地服务连接失败的问题；老师界面不再显示 `ECONNREFUSED` / `TCPConnectWrap` 堆栈。工作流未改：AI 只出候选；只有老师确认 / 编辑后确认才写入正式学生 Word；驳回和待处理不写。
 
 适用环境：
 
