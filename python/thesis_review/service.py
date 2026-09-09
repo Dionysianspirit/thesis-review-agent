@@ -541,22 +541,36 @@ def _load_trace(output_dir: Path, draft_id: str) -> dict:
         return {}
 
 
-def _history_finding(hit: HistoryHit, issue: IssueRecord, draft_id: str) -> Finding:
+def _history_finding(
+    hit: HistoryHit,
+    issue: IssueRecord,
+    draft_id: str,
+    *,
+    confirmed: bool = False,
+) -> Finding:
+    if confirmed:
+        problem = "学生在新稿中仍出现已确认的历史问题。"
+        rationale = f"历次稿件已指出：{issue.original_text}"
+        suggested = "请对照旧稿批注意图修改，并补上可核验的依据。"
+    else:
+        problem = "历史召回：新稿出现与已确认历史问题相似的原文，待老师判断是否复犯。"
+        rationale = f"仅召回相似原文，未经模型确认，不能直接写成复犯。旧稿批注：{issue.original_text}"
+        suggested = "请老师判断是否仍是同一问题；未确认前不会写入正式学生稿。"
     return Finding(
         id=f"history-{hit.issue_id}",
         issue_id=hit.issue_id,
         category=issue.category,
         source="history",
         kind="history",
-        problem="学生在新稿中仍出现已确认的历史问题。",
-        rationale=f"历次稿件已指出：{issue.original_text}",
+        problem=problem,
+        rationale=rationale,
         quote=hit.new_quote,
         anchor=hit.new_anchor,
         paragraph_index=hit.paragraph_index,
         apply="comment",
         draft_id=draft_id,
         history_refs=[hit.issue_id],
-        suggested_action="请对照旧稿批注意图修改，并补上可核验的依据。",
+        suggested_action=suggested,
         evidence=[
             Evidence(kind="history", draft_id=issue.source_draft_id, text=issue.original_text),
             Evidence(

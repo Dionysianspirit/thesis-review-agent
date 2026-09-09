@@ -6,7 +6,7 @@ import pytest
 
 from thesis_review.errors import ReviewError
 from thesis_review.web import SearchHit, WebSearcher
-from thesis_review.worker import Worker
+from thesis_review.worker import SEARCH_BUDGET, Worker
 from tests.helpers import FULL_STATS, sample_full_thesis_draft, sample_overclaim_draft
 
 
@@ -18,12 +18,19 @@ class FakeSearcher(WebSearcher):
         ]
         self.fail = fail
         self.queries: list[str] = []
+        self.fetches: list[str] = []
 
     def search(self, query: str, *, limit: int = 5):
         self.queries.append(query)
         if self.fail:
             raise ReviewError("search_failed", "外部检索失败，未写入结果。")
         return self.hits[:limit]
+
+    def fetch(self, url: str, *, max_chars: int = 4000):
+        self.fetches.append(url)
+        if self.fail:
+            raise ReviewError("search_failed", "外部检索失败，未写入结果。")
+        return {"ok": True, "url": url, "title": "example", "text": "ok", "truncated": False, "checked_time": "t"}
 
 
 def _open(worker: Worker, data: bytes) -> None:
@@ -81,3 +88,15 @@ def test_internal_data_mismatch_does_not_require_search(tmp_path: Path):
     _open(worker, sample_overclaim_draft())
     worker.dispatch("find_text", {"needle": "0.81"})
     assert searcher.queries == []
+
+
+def test_web_fetch_shares_search_budget(tmp_path: Path):
+    searcher = FakeSearcher()
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能", searcher=searcher)
+    _open(worker, sample_overclaim_draft())
+    for _unused in range(SEARCH_BUDGET):
+        worker.dispatch("web_search", {"query": "国家统计局"})
+    with pytest.raises(ReviewError) as caught:
+        worker.dispatch("web_fetch", {"url": "https://example.test/stats"})
+    assert caught.value.code == "search_budget"
+    assert searcher.fetches == []

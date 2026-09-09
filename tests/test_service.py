@@ -1,4 +1,4 @@
-"""Offline review writes a commented copy and a labelled findings file."""
+"""Offline review writes a clean copy and labelled candidate findings until the teacher exports."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -42,6 +42,8 @@ def test_offline_review_labels_history_and_rule_findings(tmp_path: Path):
     assert "model" not in sources
     history_item = next(item for item in result.findings if item.source == "history")
     assert history_item.issue_id == subjective.id
+    assert "待老师判断" in history_item.problem
+    assert "仍出现已确认的历史问题" not in history_item.problem
     assert any("避免主观评价" in evidence.text for evidence in history_item.evidence)
     assert all(item.teacher_decision == "pending" for item in result.findings)
     assert result.reviewed_path.exists()

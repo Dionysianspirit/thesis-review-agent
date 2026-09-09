@@ -267,7 +267,11 @@ class Worker:
         }
 
     def op_get_teacher_feedback(self, params: dict) -> dict:
-        items = self.sessions.list_feedback(teacher_id=self.teacher_id, limit=int(params.get("limit") or 12))
+        items = self.sessions.list_feedback(
+            teacher_id=self.teacher_id,
+            student_id=self.student_id,
+            limit=int(params.get("limit") or 12),
+        )
         return {"items": [feedback_as_soft_reference(item) for item in items]}
 
     def op_confirm_history_finding(self, params: dict) -> dict:
@@ -317,6 +321,7 @@ class Worker:
                 ),
                 issue,
                 draft_id,
+                confirmed=True,
             ),
             session_id=self.session_id,
         )
@@ -427,13 +432,17 @@ class Worker:
         }
 
     def op_web_fetch(self, params: dict) -> dict:
+        if self.search_calls >= SEARCH_BUDGET:
+            raise ReviewError("search_budget", "外部检索次数已达上限。")
         url = str(params.get("url") or "").strip()
         try:
             result = self.searcher.fetch(url)
         except ReviewError as exc:
             if exc.code in {"search_failed", "invalid_params"}:
+                self.search_calls += 1
                 return {"ok": False, "error": exc.message, "url": url, "text": "", "fabricated": False}
             raise
+        self.search_calls += 1
         return result
 
     def op_record_argument_finding(self, params: dict) -> dict:

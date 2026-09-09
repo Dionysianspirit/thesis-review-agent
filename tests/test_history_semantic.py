@@ -96,6 +96,8 @@ def test_rejected_teacher_feedback_is_not_a_positive_rule(tmp_path: Path):
     assert items
     assert items[0]["positive_rule"] is False
     assert "驳回" in items[0]["hint"]
+    other = Worker(home=tmp_path, teacher_id="teacher-a", student_id="li", major="人工智能")
+    assert other.dispatch("get_teacher_feedback", {"limit": 5})["items"] == []
     accepted = feedback_as_soft_reference(
         TeacherFeedback(
             id="x",

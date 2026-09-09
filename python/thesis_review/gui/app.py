@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 import threading
 from dataclasses import asdict
@@ -14,7 +16,7 @@ from thesis_review.fixtures import write_demo_drafts
 from thesis_review.live import live_dir, read_progress, reset_live
 from thesis_review.paths import app_home, gui_dir
 from thesis_review.service import ThesisReviewService, session_stats
-from thesis_review.session_store import ReviewSession
+from thesis_review.session_store import SESSION_FAILED, ReviewSession
 from thesis_review.settings import AppSettings, apply_model, load_settings, public_settings, save_settings
 from thesis_review.types import Finding, derive_kind
 
@@ -319,6 +321,7 @@ class Bridge:
         self.warning = ""
         self._review_done = session.status in {"awaiting_teacher", "completed"}
         self._reviewing = False
+        self.recall = self._recall_from_session(session)
         self.status = "已恢复未完成的审稿会话。" if not session.completed else "已打开历史审稿会话。"
         self.settings.last_session_id = session.id
         self.settings.last_paper_path = session.paper_path
@@ -353,14 +356,25 @@ class Bridge:
                 paper_path=str(path),
             )
         except Exception as exc:  # noqa: BLE001 - surface to teachers
+            persisted: list[Finding] = []
+            try:
+                current = self.service.sessions.get(session.id)
+                current.status = SESSION_FAILED
+                self.service.sessions.save(current)
+                persisted = list(current.findings)
+                session = current
+            except Exception:  # noqa: BLE001 - session write is best-effort
+                session.status = SESSION_FAILED
             with self._lock:
+                self.session = session
                 self.status = f"审查失败：{exc}"
-                self.findings = []
+                self.findings = [item.to_dict() for item in persisted]
                 self.recall = self._empty_recall()
                 self.warning = ""
                 self._review_error = str(exc)
                 self._review_done = True
                 self._reviewing = False
+            self._persist_session()
             return
         written_ids = {item.issue_id for item in result.findings if item.issue_id}
         skipped = []
@@ -417,19 +431,32 @@ class Bridge:
             self._review_error = ""
             self._review_done = True
             self._reviewing = False
+        if session is not None:
+            session.quality = dict(session.quality or {})
+            session.quality["recall"] = self.recall
+            self.service.sessions.save(session)
         self._persist_session()
 
     def open_reviewed(self) -> dict:
         if not self.reviewed_path:
             return {"ok": False, "message": "还没有正式审稿稿件。请先确认意见并生成。"}
-        os.startfile(self.reviewed_path)  # type: ignore[attr-defined]
-        return {"ok": True}
+        return self._open_path(self.reviewed_path)
 
     def open_folder(self) -> dict:
         if not self.output_dir:
             return {"ok": False, "message": "还没有结果文件夹。"}
-        os.startfile(self.output_dir)  # type: ignore[attr-defined]
-        return {"ok": True}
+        return self._open_path(self.output_dir)
+
+    def _open_path(self, target: str) -> dict:
+        starter = getattr(os, "startfile", None)
+        if starter is not None:
+            starter(target)
+            return {"ok": True}
+        opener = shutil.which("xdg-open") or shutil.which("open")
+        if opener:
+            subprocess.Popen([opener, target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return {"ok": True}
+        return {"ok": False, "message": "当前系统无法直接打开 Word。请到结果文件夹手动打开正式稿。"}
 
     def _stage(self) -> str:
         if self._reviewing:
@@ -439,6 +466,16 @@ class Bridge:
         if self.findings or (self.session and self.session.findings):
             return "decide"
         return "prepare"
+
+    def _recall_from_session(self, session: ReviewSession | None) -> dict:
+        if session is None:
+            return self._empty_recall()
+        raw = (session.quality or {}).get("recall")
+        if not isinstance(raw, dict):
+            return self._empty_recall()
+        recall = self._empty_recall()
+        recall.update({key: raw.get(key, recall[key]) for key in recall})
+        return recall
 
     def _session_payload(self) -> dict | None:
         if self.session is None:
@@ -484,6 +521,7 @@ class Bridge:
             self.output_dir = session.output_dir
         if session.final_output_path:
             self.reviewed_path = session.final_output_path
+        self.recall = self._recall_from_session(session)
         if session.findings:
             self._review_done = True
             self.status = "已恢复上次未完成的审稿会话。" if not session.completed else "已恢复上次审稿会话。"

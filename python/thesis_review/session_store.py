@@ -15,6 +15,7 @@ SESSION_PREPARING = "preparing"
 SESSION_REVIEWING = "reviewing"
 SESSION_AWAITING = "awaiting_teacher"
 SESSION_COMPLETED = "completed"
+SESSION_FAILED = "failed"
 
 
 @dataclass

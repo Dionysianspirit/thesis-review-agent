@@ -13,6 +13,12 @@
         <span class="brand-latin mono">TEACHER&nbsp;REVIEW</span>
       </div>
       <div class="header-actions">
+        <nav class="stage-nav" id="stage-nav" aria-label="审稿阶段">
+          <button class="stage-nav-item active" data-stage="prepare" type="button">01 准备</button>
+          <button class="stage-nav-item" data-stage="reviewing" type="button" disabled>02 初审</button>
+          <button class="stage-nav-item" data-stage="decide" type="button">03 决定</button>
+          <button class="stage-nav-item" data-stage="export" type="button">04 导出</button>
+        </nav>
         <span class="status-pill" id="status-pill">
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">准备就绪</span>

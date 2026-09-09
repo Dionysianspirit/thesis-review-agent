@@ -126,7 +126,7 @@ function renderSessions(sessions) {
   }
   box.className = "session-list";
   box.innerHTML = sessions.map((item) => {
-    const label = item.completed ? "已完成" : "未完成";
+    const label = item.completed ? "已完成" : (item.status === "failed" ? "初审失败" : "未完成");
     return `<button class="session-item" type="button" data-id="${esc(item.id)}"><span>${esc(item.student_id)} · ${esc(item.draft_id)}</span><span class="mono">${esc(label)}</span></button>`;
   }).join("");
   box.querySelectorAll("button[data-id]").forEach((btn) => {
@@ -174,6 +174,14 @@ function findingCard(finding) {
     : (finding.suggested_action ? `<div class="suggest">${esc(finding.suggested_action)}</div>` : "");
   const subtype = finding.subtype ? ` · ${finding.subtype}` : "";
   const editValue = finding.teacher_final_text || finding.problem || "";
+  const pending = decision === "pending";
+  const actions = pending ? `
+      <div class="finding-actions">
+        <button class="btn btn-dark" data-act="accepted" type="button">确认</button>
+        <button class="btn btn-ghost" data-act="rejected" type="button">驳回</button>
+        <button class="btn btn-ghost" data-act="edited_accepted" type="button">编辑后确认</button>
+      </div>
+      <textarea class="edit-box" placeholder="老师最终审稿意见">${esc(editValue)}</textarea>` : "";
   return `
     <article class="finding decision-${esc(decision)}" data-kind="${esc(kind)}" data-decision="${esc(decision)}" data-id="${esc(finding.id)}">
       <div class="finding-head">
@@ -189,12 +197,7 @@ function findingCard(finding) {
       ${suggest}
       ${teacherText}
       <p class="source-line mono">来源：${esc(finding.source || "")} · ${esc(APPLY_LABELS[finding.apply] || "拟写批注")}</p>
-      <div class="finding-actions">
-        <button class="btn btn-dark" data-act="accepted" type="button">确认</button>
-        <button class="btn btn-ghost" data-act="rejected" type="button">驳回</button>
-        <button class="btn btn-ghost" data-act="edited_accepted" type="button">编辑后确认</button>
-      </div>
-      <textarea class="edit-box" placeholder="老师最终审稿意见">${esc(editValue)}</textarea>
+      ${actions}
     </article>`;
 }
 
@@ -305,6 +308,9 @@ $("type-tabs").addEventListener("click", (event) => {
 function setStage(stage) {
   document.body.classList.remove("stage-prepare", "stage-reviewing", "stage-decide", "stage-export");
   document.body.classList.add("stage-" + (stage || "prepare"));
+  document.querySelectorAll("#stage-nav .stage-nav-item").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.stage === stage);
+  });
   if (stage === "reviewing") {
     $("live-title").textContent = "AI 正在初审";
     $("live-kicker").textContent = "LIVE";
@@ -364,7 +370,15 @@ $("btn-ingest").addEventListener("click", async () => {
 });
 
 $("btn-demo").addEventListener("click", async () => {
-  if (!hasBridge()) return;
+  if (!hasBridge()) {
+    $("teacher-name").value = "老师甲";
+    $("student-id").value = "zhou";
+    $("major").value = "人工智能";
+    $("paper-path").textContent = "演示稿 / thesis.docx";
+    log("已载入演示身份。点击「开始 AI 初审」查看候选意见。", "ok");
+    setStage("prepare");
+    return;
+  }
   setStatus("正在载入演示稿…", "busy");
   const result = await api("load_demo");
   log(result.message, result.ok ? "ok" : "err");
@@ -382,8 +396,20 @@ $("btn-choose-paper").addEventListener("click", async () => {
 });
 
 $("btn-review").addEventListener("click", async () => {
-  if (!hasBridge()) return;
   const btn = $("btn-review");
+  if (!hasBridge()) {
+    btn.disabled = true;
+    setStage("reviewing");
+    setStatus("AI 正在初审…", "busy");
+    log("AI 正在初审（浏览器演示）");
+    window.setTimeout(() => {
+      applyState(demoDecideState());
+      log("AI 初审完成，4 条候选待老师处理。", "ok");
+      setStatus("请处理候选意见", "done");
+      btn.disabled = false;
+    }, 700);
+    return;
+  }
   btn.disabled = true;
   setStage("reviewing");
   setStatus("AI 正在初审…", "busy");
@@ -474,7 +500,27 @@ $("btn-accept-format").addEventListener("click", async () => {
 });
 
 async function doExport(allowPending) {
-  if (!hasBridge()) return;
+  if (!hasBridge()) {
+    if (!allowPending && (lastStats.pending || 0) > 0) {
+      log(`仍有 ${lastStats.pending} 条意见未处理。可继续处理，或仅使用当前已确认意见生成。`, "err");
+      setStatus("仍有未处理意见", "err");
+      return;
+    }
+    const formal = (lastStats.accepted || 0) + (lastStats.edited_accepted || 0);
+    if (!formal) {
+      log("还没有老师确认的意见，无法生成正式稿。", "err");
+      return;
+    }
+    $("reviewed-path").textContent = "演示输出 / thesis-reviewed.docx";
+    $("btn-open-doc").disabled = false;
+    $("btn-open-folder").disabled = false;
+    lastStats.formal = formal;
+    renderExportStats(lastStats);
+    setStage("export");
+    log(`演示：已生成正式审稿稿件，共写入 ${formal} 条老师认可意见。浏览器预览不写真实 Word。`, "ok");
+    setStatus("正式稿已生成", "done");
+    return;
+  }
   const result = await api("export_final", allowPending);
   if (!result) return;
   if (!result.ok && result.needs_confirm) {
@@ -495,7 +541,13 @@ async function doExport(allowPending) {
 
 $("btn-export").addEventListener("click", () => doExport(false));
 $("btn-export-confirmed").addEventListener("click", () => doExport(true));
-$("btn-open-doc").addEventListener("click", () => hasBridge() && api("open_reviewed"));
+$("btn-open-doc").addEventListener("click", () => {
+  if (!hasBridge()) {
+    log("浏览器预览无法调用 Microsoft Word。请在 Windows 本机打开正式稿。", "err");
+    return;
+  }
+  api("open_reviewed");
+});
 $("btn-open-folder").addEventListener("click", () => hasBridge() && api("open_folder"));
 $("btn-settings").addEventListener("click", () => $("settings-modal").classList.remove("hidden"));
 $("btn-close-settings").addEventListener("click", () => $("settings-modal").classList.add("hidden"));
@@ -589,8 +641,8 @@ const DEMO_STATE = {
       kind: "history",
       category: "A",
       teacher_decision: "pending",
-      problem: "学生在新稿中仍出现已确认的历史问题。",
-      rationale: "历次稿件已指出：不要用「非常非常有效」这类叠词主观评价，要有数据支撑。",
+      problem: "历史召回：新稿出现与已确认历史问题相似的原文，待老师判断是否复犯。",
+      rationale: "仅召回相似原文，未经模型确认，不能直接写成复犯。旧稿批注：不要用「非常非常有效」这类叠词主观评价，要有数据支撑。",
       quote: "非常非常有效",
       anchor: "P0012",
       paragraph_index: 12,
@@ -624,6 +676,45 @@ const DEMO_STATE = {
   recall: { confirmed: 1, recalled: 1, written: 1, skipped: [], absent: [] },
 };
 
+function demoPrepareState() {
+  return Object.assign({}, DEMO_STATE, {
+    findings: [],
+    stage: "prepare",
+    reviewed_path: "",
+    status: "浏览器预览。选择当前新稿或直接开始 AI 初审，查看四阶段教师工作流。",
+    stats: { ai_candidates: 0, accepted: 0, edited_accepted: 0, rejected: 0, pending: 0, formal: 0 },
+    recall: { confirmed: 1, recalled: 0, written: 0, skipped: [], absent: [] },
+  });
+}
+
+function demoDecideState() {
+  return Object.assign({}, DEMO_STATE, {
+    stage: "decide",
+    reviewed_path: "",
+    status: "演示数据：AI 初审完成，4 条候选待老师处理。",
+    stats: { ai_candidates: 4, accepted: 0, edited_accepted: 0, rejected: 0, pending: 4, formal: 0 },
+  });
+}
+
+$("stage-nav").addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-stage]");
+  if (!btn || btn.disabled) return;
+  const target = btn.dataset.stage;
+  if (target === "prepare") {
+    setStage("prepare");
+    return;
+  }
+  if (target === "decide" && lastFindings.length) {
+    setStage("decide");
+    $("sec-decide").scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (target === "export" && ($("reviewed-path").textContent || lastStats.formal)) {
+    setStage("export");
+    $("sec-export").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
+
 function bootLive() {
   setStatus("准备就绪", "idle");
   refresh();
@@ -636,7 +727,7 @@ if (window.pywebview && window.pywebview.api) {
 window.addEventListener("DOMContentLoaded", () => {
   window.setTimeout(() => {
     if (!hasBridge()) {
-      applyState(DEMO_STATE);
+      applyState(demoPrepareState());
       setStatus("浏览器预览 · 演示数据", "idle");
     }
   }, 50);

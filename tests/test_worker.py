@@ -229,6 +229,7 @@ def test_confirm_history_finding_accepts_real_quote(tmp_path: Path):
     assert finding.source == "history"
     assert finding.issue_id == issue_id
     assert finding.teacher_decision == "pending"
+    assert "仍出现已确认的历史问题" in finding.problem
     committed = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
     comments = WordAdapter().extract_comments(WordAdapter().open_path(committed["reviewed_path"]))
     blob = "\n".join(item.text for item in comments)

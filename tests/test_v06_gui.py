@@ -17,6 +17,7 @@ from thesis_review.gui.app import Bridge  # noqa: E402
 def test_gui_is_teacher_workstation_with_decision_filters():
     html = (gui_dir() / "ui.html").read_text(encoding="utf-8")
     js = (gui_dir() / "ui.js").read_text(encoding="utf-8")
+    css = (gui_dir() / "ui.css").read_text(encoding="utf-8")
     assert "开始 AI 初审" in html
     assert "学生也可以自己先跑" not in html
     assert "待处理" in html
@@ -28,8 +29,13 @@ def test_gui_is_teacher_workstation_with_decision_filters():
     assert "tech-log" in html
     assert "decision-tabs" in html
     assert "type-tabs" in html
+    assert "stage-nav" in html
     assert "edited_accepted" in js
     assert "300" in js
+    assert "teacher_decision !== \"pending\"" in js or 'decision === "pending"' in js
+    assert "body.stage-prepare #sec-decide" in css
+    assert "body.stage-reviewing #sec-prepare" in css
+    assert "body.stage-decide #sec-prepare" in css
 
 
 def test_settings_persistence_does_not_leak_or_overwrite_key(tmp_path: Path):
@@ -74,6 +80,8 @@ def test_bridge_decide_export_only_writes_accepted(tmp_path: Path):
     assert prog["reviewed_path"] in {"", None}
     findings = prog["findings"]
     assert findings
+    blocked = bridge.export_final(False)
+    assert blocked.get("needs_confirm") is True
     first = findings[0]
     second = findings[1] if len(findings) > 1 else None
     bridge.decide_finding(first["id"], "accepted")
@@ -90,3 +98,31 @@ def test_bridge_decide_export_only_writes_accepted(tmp_path: Path):
     resumed = Bridge(tmp_path)
     assert resumed.session is not None
     assert resumed.findings
+    assert resumed.recall.get("confirmed", 0) >= 0
+
+
+def test_failed_review_marks_session_failed(tmp_path: Path):
+    draft = tmp_path / "new.docx"
+    draft.write_bytes(sample_new_draft())
+    bridge = Bridge(tmp_path)
+    bridge.window = object()
+    bridge._pick = lambda *, multiple: [str(draft)]  # type: ignore[method-assign]
+    bridge._default_output = lambda: tmp_path / "out"  # type: ignore[method-assign]
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("pi exploded")
+
+    bridge.service.review = boom  # type: ignore[method-assign]
+    started = bridge.review_file()
+    assert started["started"] is True
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if bridge.progress().get("done"):
+            break
+        time.sleep(0.05)
+    prog = bridge.progress()
+    assert prog["done"] is True
+    assert prog["error"]
+    assert bridge.session is not None
+    stored = bridge.service.sessions.get(bridge.session.id)
+    assert stored.status == "failed"
