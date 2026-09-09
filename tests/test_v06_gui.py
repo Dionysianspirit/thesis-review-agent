@@ -34,6 +34,9 @@ def test_gui_is_teacher_workstation_with_decision_filters():
     assert "300" in js
     assert "teacher_decision !== \"pending\"" in js or 'decision === "pending"' in js
     assert "正式稿已生成" in js
+    assert "target === \"reviewing\"" in js
+    assert "formal === 0 || (current.pending || 0) > 0" in js
+    assert "btn-export-confirmed" in js
     assert "body.stage-prepare #sec-decide" in css
     assert "body.stage-reviewing #sec-prepare" in css
     assert "body.stage-decide #sec-prepare" in css

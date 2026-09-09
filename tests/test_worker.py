@@ -382,3 +382,17 @@ def test_nav_budget_then_only_record_or_commit(tmp_path: Path):
     assert recorded["ok"] is True
     committed = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
     assert Path(committed["reviewed_path"]).is_file()
+
+
+def test_worker_word_tools_are_blocked_by_teacher_gate(tmp_path: Path):
+    worker = Worker(home=tmp_path, teacher_id="teacher-a", student_id="zhou", major="人工智能")
+    _open(worker, sample_new_draft())
+    with pytest.raises(ReviewError) as add:
+        worker.dispatch("add_comment", {"anchor": "P1", "text": "直接写给学生"})
+    assert add.value.code == "teacher_gate"
+    with pytest.raises(ReviewError) as replace:
+        worker.dispatch("replace_tracked", {"anchor": "P1", "old": "非常非常", "new": "较为"})
+    assert replace.value.code == "teacher_gate"
+    committed = worker.dispatch("commit_review", {"draft_id": "new", "output_dir": str(tmp_path / "out")})
+    comments = WordAdapter().extract_comments(WordAdapter().open_path(committed["reviewed_path"]))
+    assert comments == []

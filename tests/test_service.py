@@ -7,6 +7,7 @@ from docx import Document
 
 from tests.helpers import sample_history_v1, sample_new_draft, sample_overclaim_draft
 from thesis_review.history.store import HistoryStore
+from thesis_review.quality import summarize_quality
 from thesis_review.service import ThesisReviewService
 from thesis_review.settings import AppSettings
 from thesis_review.word.adapter import WordAdapter
@@ -54,6 +55,10 @@ def test_offline_review_labels_history_and_rule_findings(tmp_path: Path):
     texts = [comment.text for comment in comments]
     assert not any("历次" in text or "已指出" in text for text in texts)
     assert not any(comment.author == "审改助手" for comment in comments)
+    quality = summarize_quality(result.findings, {})
+    assert quality["history_recall"] >= 1
+    assert quality["history_recidivism"] == 0
+    assert "api_key" not in quality
 
 
 def test_offline_review_has_no_argument_source(tmp_path: Path):

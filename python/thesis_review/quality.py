@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from thesis_review.types import Finding, derive_kind
+from thesis_review.types import Finding, derive_kind, is_confirmed_recidivism
 
 GATE_FAIL_CODES = frozenset({"quote_not_in_draft", "missing_quote", "missing_source", "issue_mismatch"})
 
@@ -19,7 +19,8 @@ def summarize_quality(
     decisions = {"pending": 0, "accepted": 0, "rejected": 0, "edited_accepted": 0}
     kinds: dict[str, int] = {}
     subtypes: dict[str, int] = {}
-    history_hits = 0
+    history_recall = 0
+    history_recidivism = 0
     for item in findings:
         decision = item.teacher_decision or "pending"
         decisions[decision] = decisions.get(decision, 0) + 1
@@ -28,7 +29,9 @@ def summarize_quality(
         if item.subtype:
             subtypes[item.subtype] = subtypes.get(item.subtype, 0) + 1
         if kind == "history":
-            history_hits += 1
+            history_recall += 1
+            if is_confirmed_recidivism(item):
+                history_recidivism += 1
     total = len(findings)
     accepted = decisions.get("accepted", 0) + decisions.get("edited_accepted", 0)
     rejected = decisions.get("rejected", 0)
@@ -45,7 +48,8 @@ def summarize_quality(
         "rejected_rate": _rate(rejected, total),
         "content_types": subtypes,
         "kinds": kinds,
-        "history_recidivism": history_hits,
+        "history_recall": history_recall,
+        "history_recidivism": history_recidivism,
         "gate_rejects": gate_rejects or _gate_rejects(trace),
         "web_search_count": search_count or ops.count("web_search"),
         "unnecessary_search": unnecessary_search,

@@ -165,3 +165,57 @@ def test_web_skip_faux_does_not_search(tmp_path: Path):
     assert "web_search" not in ops
     assert "find_text" in ops
     assert result.reviewed_path.is_file()
+
+
+def test_web_fail_faux_does_not_fabricate_external_finding(tmp_path: Path):
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="full",
+        data=sample_full_thesis_draft(),
+        output_dir=tmp_path / "out",
+        use_pi=True,
+        faux=True,
+        faux_scenario="web_fail",
+        offline_fallback=False,
+    )
+    ops = [item["op"] for item in json.loads((tmp_path / "out" / "full-trace.json").read_text(encoding="utf-8"))["ops"]]
+    assert "web_search" in ops
+    assert "record_external_finding" not in ops
+    assert all(item.kind != "external" for item in result.findings)
+    comments = WordAdapter().extract_comments(WordAdapter().open_path(result.reviewed_path))
+    assert comments == []
+
+
+def test_web_needed_records_external_only_with_real_sources(tmp_path: Path):
+    service = ThesisReviewService(
+        store=HistoryStore(tmp_path / "history.sqlite"),
+        adapter=WordAdapter(),
+        home=tmp_path,
+    )
+    result = service.review(
+        teacher_id="teacher-a",
+        student_id="zhou",
+        draft_id="full",
+        data=sample_full_thesis_draft(),
+        output_dir=tmp_path / "out",
+        use_pi=True,
+        faux=True,
+        faux_scenario="web_needed",
+        offline_fallback=False,
+    )
+    ops = [item["op"] for item in json.loads((tmp_path / "out" / "full-trace.json").read_text(encoding="utf-8"))["ops"]]
+    assert "web_search" in ops
+    externals = [item for item in result.findings if item.kind == "external" or item.source == "external"]
+    if "record_external_finding" in ops:
+        assert externals
+        assert all(item.external_sources and item.external_sources[0].url for item in externals)
+    else:
+        assert externals == []
+    comments = WordAdapter().extract_comments(WordAdapter().open_path(result.reviewed_path))
+    assert comments == []

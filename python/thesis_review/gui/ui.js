@@ -244,9 +244,9 @@ function renderExportStats(stats) {
   const current = stats || lastStats;
   $("export-stats").textContent =
     `AI 候选：${current.ai_candidates || 0}　老师确认：${current.accepted || 0}　编辑后确认：${current.edited_accepted || 0}　驳回：${current.rejected || 0}　未处理：${current.pending || 0}　正式采用：${current.formal || 0}`;
-  const canExport = (current.accepted || 0) + (current.edited_accepted || 0) > 0 || (current.ai_candidates || 0) > 0;
-  $("btn-export").disabled = !canExport;
-  $("btn-export-confirmed").disabled = !canExport;
+  const formal = (current.accepted || 0) + (current.edited_accepted || 0);
+  $("btn-export").disabled = formal === 0 || (current.pending || 0) > 0;
+  $("btn-export-confirmed").disabled = formal === 0;
 }
 
 function renderTab() {
@@ -310,10 +310,13 @@ function setStage(stage) {
   document.body.classList.add("stage-" + (stage || "prepare"));
   document.querySelectorAll("#stage-nav .stage-nav-item").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.stage === stage);
+    if (btn.dataset.stage === "reviewing") {
+      btn.disabled = stage === "prepare" && !lastFindings.length;
+    }
   });
   if (stage === "reviewing") {
-    $("live-title").textContent = "AI 正在初审";
-    $("live-kicker").textContent = "LIVE";
+    $("live-title").textContent = lastFindings.length ? "初审候选已形成" : "AI 正在初审";
+    $("live-kicker").textContent = lastFindings.length ? "REVIEW" : "LIVE";
   } else if (stage === "decide" || stage === "export") {
     $("live-title").textContent = "初审候选已形成";
     $("live-kicker").textContent = "REVIEW";
@@ -706,6 +709,11 @@ $("stage-nav").addEventListener("click", (event) => {
   const target = btn.dataset.stage;
   if (target === "prepare") {
     setStage("prepare");
+    return;
+  }
+  if (target === "reviewing" && (lastFindings.length || document.body.classList.contains("stage-reviewing"))) {
+    setStage("reviewing");
+    $("sec-live").scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
   if (target === "decide" && lastFindings.length) {

@@ -226,6 +226,14 @@ def is_exportable(finding: Finding) -> bool:
     return finding.teacher_decision in FINAL_DECISIONS
 
 
+def is_confirmed_recidivism(finding: Finding) -> bool:
+    """True only after Agent confirmed the same issue still exists, not mere recall."""
+    if derive_kind(finding) != KIND_HISTORY:
+        return False
+    text = f"{finding.original_problem} {finding.problem}"
+    return "仍出现已确认的历史问题" in text
+
+
 def prepare_candidate(finding: Finding, *, session_id: str = "") -> Finding:
     if not finding.kind:
         finding.kind = derive_kind(finding)
