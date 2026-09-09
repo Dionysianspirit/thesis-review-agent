@@ -37,6 +37,25 @@ def test_demo_command_writes_teacher_approved_word_comments(tmp_path: Path, monk
     assert source == []
 
 
+def test_demo_faux_agent_still_waits_for_teacher_word_comments(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("THESIS_REVIEW_HOME", str(tmp_path / "home"))
+    out = tmp_path / "out"
+    assert main(["--home", str(tmp_path / "home"), "demo", "--faux", "--out", str(out)]) == 0
+    payload = json.loads((out / GATE_FILENAME).read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["agent"] == "faux-pi"
+    assert payload["pi_trace_ok"] is True
+    assert "commit_review" in payload["trace_ops"]
+    assert "run_checks" in payload["trace_ops"]
+    assert payload["comments_before"] == 0
+    assert payload["n_exported"] >= 1
+    comments = WordAdapter().extract_comments(WordAdapter().open_path(out / "new-reviewed.docx"))
+    blob = "\n".join(item.text for item in comments)
+    assert TEACHER_EDIT_TEXT in blob
+    source = WordAdapter().extract_comments(WordAdapter().open_path(out / "new-source.docx"))
+    assert source == []
+
+
 def test_export_command_rewrites_teacher_docx(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("THESIS_REVIEW_HOME", str(tmp_path / "home"))
     out = tmp_path / "out"

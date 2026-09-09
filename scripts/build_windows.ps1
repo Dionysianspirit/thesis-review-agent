@@ -39,48 +39,17 @@ $AgentOut = Join-Path $OutDir "agent"
 if (Test-Path $AgentOut) { Remove-Item $AgentOut -Recurse -Force }
 Copy-Item -Path (Join-Path $Root "agent") -Destination $AgentOut -Recurse -Force
 
-$BundledNode = Join-Path $RuntimeNode "node.exe"
-$Selftest = Start-Process -FilePath $BundledNode -ArgumentList @((Join-Path $AgentOut "review.mjs"), "--selftest") -WorkingDirectory $AgentOut -Wait -PassThru -NoNewWindow
-if ($Selftest.ExitCode -ne 0) {
-    throw "Bundled pi selftest failed"
-}
-
-$Probe = Join-Path $Root "artifacts\packaged-demo"
-if (Test-Path $Probe) { Remove-Item $Probe -Recurse -Force }
-New-Item -ItemType Directory -Path $Probe | Out-Null
-$proc = Start-Process -FilePath $Exe -ArgumentList @("--home", $Probe, "demo", "--out", $Probe) -Wait -PassThru
-if ($proc.ExitCode -ne 0) {
-    throw "Packaged demo review failed with exit $($proc.ExitCode)"
-}
-$Findings = $null
-foreach ($i in 1..10) {
-    $Findings = Get-ChildItem -Path $Probe -Filter "*-findings.json" -ErrorAction SilentlyContinue
-    if ($Findings) { break }
-    Start-Sleep -Milliseconds 200
-}
-if (-not $Findings) {
-    throw "Packaged demo did not write findings.json"
-}
-$Gate = Join-Path $Probe "teacher-gate.json"
-if (-not (Test-Path $Gate)) {
-    throw "Packaged demo did not write teacher-gate.json"
-}
-$GatePayload = Get-Content -Path $Gate -Raw -Encoding UTF8 | ConvertFrom-Json
-if (-not $GatePayload.ok) {
-    throw "Packaged teacher-gate demo failed: $($GatePayload.error)"
-}
-if ($GatePayload.comments_before -ne 0) {
-    throw "Teacher gate failed: comments were written before teacher decisions"
-}
-if ([int]$GatePayload.n_exported -lt 1 -or [int]$GatePayload.comments_after -lt 1) {
-    throw "Packaged demo did not export teacher-approved Word comments"
-}
-Write-Output "Built $Exe"
-Write-Output "Demo findings: $($Findings.FullName)"
-Write-Output "Teacher-gate comments: $($GatePayload.comments_after) exported=$($GatePayload.n_exported)"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 & $Python (Join-Path $Root "scripts\rename_dist.py")
 if ($LASTEXITCODE -ne 0) {
     throw "rename_dist.py failed with exit $LASTEXITCODE"
+}
+
+# Smoke the renamed teacher EXE: GUI assets, bundled Pi, worker TCP (the GUI/agent
+# path), then faux first-pass → teacher decisions → Word comments.
+$ProductDir = Join-Path $Root "dist\论文审改助手"
+& $Python (Join-Path $Root "scripts\smoke_packaged_demo.py") "--dist" $ProductDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Frozen teacher EXE smoke failed with exit $LASTEXITCODE"
 }

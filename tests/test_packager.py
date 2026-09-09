@@ -15,16 +15,24 @@ def test_packager_collects_docx_templates_and_docxengine_stdlib():
     assert "xml.etree.ElementTree" in packager
     assert "docxengine" in packager
     assert "ensure_docx_layout" in packager
-    windows = (ROOT / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
-    assert "pyinstaller_build.py" in windows
-    assert "rename_dist.py" in windows
-    assert "LASTEXITCODE" in windows
     smoke = (ROOT / "scripts" / "smoke_packaged_demo.py").read_text(encoding="utf-8")
     assert "pyinstaller_build" in smoke
     assert "teacher-gate.json" in smoke
     assert "comments_before" in smoke
     assert "smoke_worker_teacher_gate" in smoke
+    assert "smoke_worker_tcp_teacher_gate" in smoke
+    assert "assert_gui_bundle" in smoke
+    assert "--faux" in smoke
+    assert "--portfile" in smoke
+    assert "CREATE_NO_WINDOW" in smoke
+    assert "论文审改助手.exe" in smoke
     assert "smoke_pi_selftest" in smoke
+    windows = (ROOT / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
+    assert "pyinstaller_build.py" in windows
+    assert "rename_dist.py" in windows
+    assert "LASTEXITCODE" in windows
+    assert "smoke_packaged_demo.py" in windows
+    assert "--dist" in windows
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "build_windows.ps1" in workflow
     assert "windows-latest" in workflow
@@ -69,3 +77,23 @@ def test_word_engine_traces_frozen_stdlib_deps():
     assert "xml.etree.ElementTree" in engine
     assert "unicodedata" in engine
     assert "zipfile" in engine
+
+
+def test_assert_gui_bundle_requires_teacher_workstation_html(tmp_path: Path):
+    import sys
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from smoke_packaged_demo import assert_gui_bundle
+
+    gui = tmp_path / "_internal" / "thesis_review" / "gui"
+    gui.mkdir(parents=True)
+    try:
+        assert_gui_bundle(tmp_path)
+    except SystemExit as exc:
+        assert "ui.html" in str(exc)
+    else:
+        raise AssertionError("missing ui.html should fail")
+    (gui / "ui.html").write_text("<html>开始 AI 初审 生成正式审稿稿件</html>", encoding="utf-8")
+    (gui / "ui.js").write_text("/* js */", encoding="utf-8")
+    (gui / "ui.css").write_text("/* css */", encoding="utf-8")
+    assert assert_gui_bundle(tmp_path) == gui

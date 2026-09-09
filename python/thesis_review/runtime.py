@@ -53,6 +53,8 @@ def agent_entry() -> Path:
 
 
 def python_path() -> str:
+    if getattr(sys, "frozen", False):
+        return str(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
     return str(repo_root() / "python")
 
 

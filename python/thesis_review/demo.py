@@ -68,8 +68,12 @@ def apply_demo_teacher_decisions(service: ThesisReviewService, session_id: str) 
     }
 
 
-def run_teacher_demo(service: ThesisReviewService, output_dir: Path) -> dict:
-    """Offline first-pass → teacher gate → Word comments. Used by CLI and Windows EXE smoke."""
+def run_teacher_demo(service: ThesisReviewService, output_dir: Path, *, faux: bool = False) -> dict:
+    """First-pass → teacher gate → Word comments. Used by CLI and Windows EXE smoke.
+
+    ``faux=True`` drives the bundled Pi agent over the frozen worker TCP port so the
+    packager cannot pass by silently falling back to offline rules.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     drafts = write_demo_drafts(output_dir / "demo-drafts")
@@ -98,6 +102,9 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path) -> dict:
         data=drafts["new"].read_bytes(),
         output_dir=output_dir,
         use_model=False,
+        use_pi=faux,
+        faux=faux,
+        offline_fallback=not faux,
         paper_path=str(drafts["new"]),
     )
     adapter = service.adapter
@@ -113,6 +120,17 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path) -> dict:
     rejected_absent = all(problem not in blob for problem in decisions["rejected_problems"] if problem)
     edited_present = (not decisions["edited_text"]) or decisions["edited_text"] in blob
     stats = session_stats(session.findings)
+    trace_path = output_dir / "new-trace.json"
+    trace_ops: list[str] = []
+    if trace_path.is_file():
+        try:
+            trace_ops = [
+                str(item.get("op") or "")
+                for item in (json.loads(trace_path.read_text(encoding="utf-8")).get("ops") or [])
+            ]
+        except json.JSONDecodeError:
+            trace_ops = []
+    pi_trace_ok = (not faux) or ("commit_review" in trace_ops and "run_checks" in trace_ops)
     ok = bool(
         exported.get("ok")
         and not comments_before
@@ -125,12 +143,18 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path) -> dict:
         and rejected_absent
         and stats["pending"] == 0
         and stats["formal"] >= 1
+        and not result.warning
+        and pi_trace_ok
     )
     error = ""
     if comments_before or source_comments:
         error = "AI 初审后不应把候选意见写入 Word。"
     elif not result.findings:
         error = "演示稿没有产生候选意见。"
+    elif result.warning:
+        error = result.warning
+    elif faux and not pi_trace_ok:
+        error = "Faux Agent 没有经 worker TCP 完成初审（缺少工具轨迹）。"
     elif not exported.get("ok"):
         error = str(exported.get("message") or "未能生成正式审稿稿件。")
     elif not comments_after:
@@ -158,6 +182,9 @@ def run_teacher_demo(service: ThesisReviewService, output_dir: Path) -> dict:
         "rejected_absent": rejected_absent,
         "comment_bodies": comments_after,
         "stats": stats,
+        "agent": "faux-pi" if faux else "offline",
+        "pi_trace_ok": pi_trace_ok,
+        "trace_ops": trace_ops,
         "kinds": sorted({item.kind for item in session.findings if item.kind}),
         "exportable_bodies": [
             comment_body(item) for item in session.findings if item.teacher_decision in {DECISION_ACCEPTED, DECISION_EDITED}

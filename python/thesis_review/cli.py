@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
 
     demo = sub.add_parser("demo", help="用内置模拟稿跑通老师确认门：初审候选 → 老师决定 → 正式 Word 批注")
     demo.add_argument("--out", type=Path, required=True)
+    demo.add_argument(
+        "--faux",
+        action="store_true",
+        help="经 Pi Agent 与 worker TCP 做第一轮初审（打包冒烟用，不回退离线规则）",
+    )
 
     export = sub.add_parser("export", help="将老师已确认意见写入正式 Word")
     export.add_argument("--session", required=True, help="Review Session id")
@@ -95,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         print(result.findings_path)
         return 0
     if args.command == "demo":
-        payload = run_teacher_demo(service, args.out)
+        payload = run_teacher_demo(service, args.out, faux=bool(args.faux))
         print(payload["reviewed_path"])
         print(payload["findings_path"])
         print(payload["gate_path"])
