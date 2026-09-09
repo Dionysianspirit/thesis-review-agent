@@ -17,23 +17,12 @@ npm ci --omit=dev
 Pop-Location
 
 # PyInstaller gets an ASCII name; Python then renames the folder/exe to 论文审改助手.
+# Freeze flags live in scripts/pyinstaller_build.py so Windows and Linux smoke stay in sync.
 $DistName = "ThesisReviewAgent"
-$Entry = Join-Path $Root "python\thesis_review\gui\app.py"
-$GuiData = "python\thesis_review\gui;thesis_review\gui"
-$EngineData = ".vendor\docxengine\src;docxengine"
-
-& $Python -m PyInstaller --noconfirm --clean --windowed --onedir `
-    --name $DistName `
-    --paths (Join-Path $Root "python") `
-    --add-data $GuiData `
-    --add-data $EngineData `
-    --hidden-import thesis_review `
-    --hidden-import thesis_review.gui.app `
-    --hidden-import thesis_review.demo `
-    --hidden-import docx `
-    --collect-submodules thesis_review `
-    --collect-all webview `
-    $Entry
+& $Python (Join-Path $Root "scripts\pyinstaller_build.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller freeze failed with exit $LASTEXITCODE"
+}
 
 $OutDir = Join-Path $Root "dist\$DistName"
 $Exe = Join-Path $OutDir "$DistName.exe"

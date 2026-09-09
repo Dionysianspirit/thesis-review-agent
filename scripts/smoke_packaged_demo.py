@@ -13,56 +13,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIST_NAME = "ThesisReviewAgent"
-SEP = ";" if os.name == "nt" else ":"
-
-
-def _python() -> str:
-    return sys.executable
-
-
-def _add_data(src: str, dest: str) -> str:
-    return f"{src}{SEP}{dest}"
-
-
-def build() -> Path:
-    out_dir = ROOT / "dist" / DIST_NAME
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    gui_data = _add_data(str(ROOT / "python" / "thesis_review" / "gui"), "thesis_review/gui")
-    engine_data = _add_data(str(ROOT / ".vendor" / "docxengine" / "src"), "docxengine")
-    command = [
-        _python(),
-        "-m",
-        "PyInstaller",
-        "--noconfirm",
-        "--clean",
-        "--onedir",
-        "--name",
-        DIST_NAME,
-        "--paths",
-        str(ROOT / "python"),
-        "--add-data",
-        gui_data,
-        "--add-data",
-        engine_data,
-        "--hidden-import",
-        "thesis_review",
-        "--hidden-import",
-        "thesis_review.gui.app",
-        "--hidden-import",
-        "thesis_review.demo",
-        "--hidden-import",
-        "docx",
-        "--collect-submodules",
-        "thesis_review",
-        str(ROOT / "python" / "thesis_review" / "gui" / "app.py"),
-    ]
-    if os.name == "nt":
-        command.insert(command.index("--onedir") + 1, "--windowed")
-        command.extend(["--collect-all", "webview"])
-    subprocess.run(command, cwd=str(ROOT), check=True)
-    return out_dir
+sys.path.insert(0, str(ROOT / "scripts"))
+from pyinstaller_build import DIST_NAME, build  # noqa: E402
 
 
 def _binary(out_dir: Path) -> Path:
@@ -140,7 +92,18 @@ def main() -> int:
     _bundle_runtime(out_dir)
     binary = _binary(out_dir)
     payload = smoke(binary, ROOT / "artifacts" / "packaged-demo")
-    print(json.dumps({"binary": str(binary), **{k: payload[k] for k in ("ok", "candidates", "comments_before", "comments_after", "n_exported")}}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "binary": str(binary),
+                **{
+                    k: payload[k]
+                    for k in ("ok", "candidates", "comments_before", "comments_after", "n_exported")
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
