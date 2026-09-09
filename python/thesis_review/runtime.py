@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from thesis_review.applog import log_dir, redact, write_error, write_run
 from thesis_review.errors import ReviewError
 from thesis_review.paths import repo_root
 
@@ -149,11 +150,24 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
     env["THESIS_REVIEW_ROOT"] = str(repo_root())
     env["PYTHONPATH"] = python_path()
     env["PYTHONIOENCODING"] = "utf-8"
+    home = Path(payload.get("home") or Path.cwd())
+    logs = log_dir(home)
+    env["THESIS_LOG_DIR"] = str(logs)
     if request.get("api_key"):
         env["THESIS_API_KEY"] = str(request["api_key"])
         env["OPENAI_API_KEY"] = str(request["api_key"])
     if request.get("base_url"):
         env["THESIS_BASE_URL"] = str(request["base_url"])
+    write_run(
+        home,
+        "pi start",
+        node=str(node),
+        script=str(script),
+        timeout=timeout,
+        faux=faux,
+        session=str(payload.get("session_id") or ""),
+        draft=str(payload.get("draft_id") or ""),
+    )
     try:
         result = subprocess.run(
             command,
@@ -165,8 +179,24 @@ def run_pi_review(request: dict, *, faux: bool = False, timeout: int = 180) -> d
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
+        write_error(
+            home,
+            f"pi_timeout after {timeout}s",
+            exc=exc,
+            cmd=redact(" ".join(command)),
+            session=str(payload.get("session_id") or ""),
+        )
         raise ReviewError("pi_timeout", "模型初审超过等待时间，已停止。") from exc
     if result.returncode != 0:
-        raise ReviewError("pi_failed", result.stderr.strip() or result.stdout.strip() or "pi 进程失败")
+        stderr = redact((result.stderr or result.stdout or "pi 进程失败").strip())[:4000]
+        write_error(
+            home,
+            f"pi_failed exit={result.returncode}",
+            cmd=redact(" ".join(command)),
+            stderr=stderr,
+            session=str(payload.get("session_id") or ""),
+        )
+        raise ReviewError("pi_failed", stderr or "pi 进程失败")
+    write_run(home, "pi done", session=str(payload.get("session_id") or ""))
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     return payload

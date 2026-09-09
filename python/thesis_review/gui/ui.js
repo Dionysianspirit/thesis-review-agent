@@ -581,6 +581,7 @@ $("btn-open-doc").addEventListener("click", () => {
   api("open_reviewed");
 });
 $("btn-open-folder").addEventListener("click", () => hasBridge() && api("open_folder"));
+$("btn-logs").addEventListener("click", () => hasBridge() && api("open_logs"));
 $("btn-settings").addEventListener("click", () => $("settings-modal").classList.remove("hidden"));
 $("btn-close-settings").addEventListener("click", () => $("settings-modal").classList.add("hidden"));
 $("settings-modal").addEventListener("click", (event) => {

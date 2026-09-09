@@ -23,6 +23,7 @@
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">准备就绪</span>
         </span>
+        <button class="pill-link" id="btn-logs" type="button">打开日志文件夹</button>
         <button class="pill-link" id="btn-settings" type="button">模型设置</button>
       </div>
     </div>
@@ -190,7 +191,7 @@
   <div id="settings-modal" class="modal hidden" role="dialog" aria-labelledby="settings-title">
     <div class="modal-card">
       <h2 id="settings-title" class="serif">模型设置（可选）</h2>
-      <p class="modal-note">密钥只存在本机，不会打进软件包。默认走 OpenAI 兼容接口；国内中转填写 Base URL。已保存的密钥重启后仍有效；输入框留空再保存，不会把旧密钥清掉。要更换时再贴新密钥。</p>
+      <p class="modal-note">密钥只存在本机，不会打进软件包。默认走 OpenAI 兼容接口；国内中转填写 Base URL。已保存的密钥重启后仍有效；输入框留空再保存，不会把旧密钥清掉。排障请点「打开日志文件夹」，把 run.log / ops.log / error.log 发出来；日志不含密钥和论文原文。</p>
       <label>提供方
         <input id="provider" type="text" placeholder="openai-compatible">
       </label>

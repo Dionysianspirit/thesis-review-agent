@@ -8,6 +8,7 @@ import threading
 from dataclasses import asdict
 from pathlib import Path
 
+from thesis_review.applog import log_dir, setup, write_error, write_run
 from thesis_review.cli import build_service, main as cli_main
 from thesis_review.worker import main as worker_main
 from thesis_review.fixtures import write_demo_drafts
@@ -22,6 +23,7 @@ from thesis_review.types import Finding, derive_kind
 class Bridge:
     def __init__(self, home: Path) -> None:
         self.home = home
+        setup(home, kind="gui")
         self.service: ThesisReviewService = build_service(home)
         self.settings: AppSettings = load_settings(home)
         self.window = None
@@ -73,6 +75,7 @@ class Bridge:
                 "history_drafts": [asdict(item) for item in self.service.sessions.list_history_drafts(teacher_id=self.settings.teacher_id, student_id=self.settings.student_id)],
                 "stats": session_stats([Finding.from_dict(item) if isinstance(item, dict) else item for item in self.findings]) if self.findings else session_stats([]),
                 "stage": self._stage(),
+                "log_dir": str(log_dir(self.home)),
             }
         )
         return payload
@@ -354,6 +357,7 @@ class Bridge:
                 paper_path=str(path),
             )
         except Exception as exc:  # noqa: BLE001 - surface to teachers
+            write_error(self.home, "gui review crashed", exc=exc, paper=str(path.name))
             persisted: list[Finding] = []
             try:
                 current = self.service.sessions.get(session.id)
@@ -444,6 +448,11 @@ class Bridge:
         if not self.output_dir:
             return {"ok": False, "message": "还没有结果文件夹。"}
         return self._open_path(self.output_dir)
+
+    def open_logs(self) -> dict:
+        path = log_dir(self.home)
+        write_run(self.home, "open logs folder")
+        return self._open_path(str(path))
 
     def _open_path(self, target: str) -> dict:
         path = Path(target)

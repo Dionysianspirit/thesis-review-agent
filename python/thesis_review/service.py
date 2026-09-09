@@ -6,6 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
+from thesis_review.applog import write_error, write_run
 from thesis_review.checks.format import check_format
 from thesis_review.checks.language import check_language
 from thesis_review.comments import comment_body as _comment_body
@@ -270,6 +271,16 @@ class ThesisReviewService:
         else:
             session.status = "reviewing"
             self.sessions.save(session)
+        write_run(
+            self.home,
+            "review start",
+            session=session.id,
+            draft=draft_id,
+            pi=should_pi,
+            faux=faux,
+            model=semantic,
+            timeout=pi_timeout,
+        )
         if should_pi:
             try:
                 result = self._review_with_pi(
@@ -298,6 +309,20 @@ class ThesisReviewService:
                     raise
                 recovered = load_partial_findings(live)
                 warning = offline_fallback_warning(exc, semantic=semantic, recovered=bool(recovered))
+                write_error(
+                    self.home,
+                    "review pi failed",
+                    exc=exc,
+                    session=session.id,
+                    recovered=len(recovered),
+                )
+                write_run(
+                    self.home,
+                    "review fallback",
+                    session=session.id,
+                    recovered=len(recovered),
+                    offline=not recovered,
+                )
                 if recovered:
                     return self._finish_partial_pi(
                         session=session,
@@ -446,6 +471,13 @@ class ThesisReviewService:
         result.findings_path.write_text(
             json.dumps([item.to_dict() for item in findings], ensure_ascii=False, indent=2),
             encoding="utf-8",
+        )
+        write_run(
+            self.home,
+            "review done",
+            session=session.id,
+            findings=len(findings),
+            warning=bool(result.warning),
         )
         return result
 
