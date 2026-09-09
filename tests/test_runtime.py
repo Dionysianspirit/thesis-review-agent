@@ -17,6 +17,10 @@ def test_agent_entry_points_at_review_script():
     path = agent_entry()
     assert path.name == "review.mjs"
     assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    assert "unlinkSync" in text
+    assert "removeIfExists" in text
+    assert "connectWorker" in text
 
 
 def test_bundled_pi_selftest_runs():
@@ -64,6 +68,29 @@ def test_run_pi_review_adds_live_worker_arg(tmp_path: Path, monkeypatch):
     assert Path(args[args.index("--live") + 1]) == out / "live"
     assert "api_key" not in dumped
     assert "sk-secret" not in json.dumps(dumped)
+
+
+def test_run_pi_review_deletes_stale_worker_portfile(tmp_path: Path, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"findings_path": str(tmp_path / "out.json")})
+        stderr = ""
+
+    monkeypatch.setattr("thesis_review.runtime.subprocess.run", lambda *a, **k: Result())
+    monkeypatch.setattr("thesis_review.runtime.resolve_node", lambda: Path("node"))
+    out = tmp_path / "eval-case"
+    out.mkdir()
+    stale = out / "worker.port"
+    stale.write_text("62852", encoding="ascii")
+    run_pi_review(
+        {
+            "home": str(tmp_path),
+            "teacher_id": "teacher-a",
+            "student_id": "zhou",
+            "output_dir": str(out),
+        }
+    )
+    assert not stale.exists()
 
 
 def test_run_pi_review_writes_redacted_request_and_honors_timeout(tmp_path: Path, monkeypatch):
