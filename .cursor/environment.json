@@ -1,0 +1,4 @@
+{
+  "name": "thesis-review-agent",
+  "install": "bash scripts/cloud-agent-install.sh"
+}
